@@ -26,7 +26,7 @@
       </div>
 
       <div v-for="p in providers" :key="p.id" class="di-card di-provider-row" :class="{ open: openProvider === p.id }">
-        <div class="di-provider-header" @click="openProvider = openProvider === p.id ? null : p.id">
+        <div class="di-provider-header" @click="onToggleProvider(p.id)">
           <span class="di-dot" :style="{ background: form[p.keyField] ? '#22c55e' : '#d1d5db' }"></span>
           <span class="di-provider-name">{{ p.label }}</span>
           <span class="di-chevron">›</span>
@@ -34,8 +34,38 @@
         <div v-if="openProvider === p.id" class="di-provider-fields">
           <label class="di-label">API Key</label>
           <input v-model="form[p.keyField]" class="di-input" type="password" placeholder="Enter to replace — leave as-is to keep current key" />
-          <label class="di-label" style="margin-top:10px">Model</label>
-          <input v-model="form[p.modelField]" class="di-input" :placeholder="p.defaultModel" />
+
+          <div class="di-model-label-row">
+            <label class="di-label">Model</label>
+            <button
+              type="button"
+              class="di-refresh-link"
+              :disabled="!form[p.keyField] || store.modelOptionsLoading[p.id]"
+              @click="onRefreshModels(p.id)"
+            >
+              {{ store.modelOptionsLoading[p.id] ? 'Fetching…' : 'Refresh models' }}
+            </button>
+          </div>
+
+          <select
+            v-if="(store.modelOptions[p.id] || []).length"
+            v-model="form[p.modelField]"
+            class="di-input"
+          >
+            <option v-if="form[p.modelField] && !store.modelOptions[p.id].includes(form[p.modelField])" :value="form[p.modelField]">
+              {{ form[p.modelField] }} (currently set, not in live list)
+            </option>
+            <option v-for="m in store.modelOptions[p.id]" :key="m" :value="m">{{ m }}</option>
+          </select>
+          <input v-else v-model="form[p.modelField]" class="di-input" :placeholder="p.defaultModel" />
+
+          <p v-if="!form[p.keyField]" class="di-model-hint">Add an API key and save before models can be fetched.</p>
+          <p v-else-if="store.modelOptionsError[p.id]" class="di-model-hint di-model-hint-error">
+            Couldn't fetch live models ({{ store.modelOptionsError[p.id] }}) — you can still type a model ID directly above.
+          </p>
+          <p v-else-if="!(store.modelOptions[p.id] || []).length && !store.modelOptionsLoading[p.id]" class="di-model-hint">
+            No models fetched yet — click "Refresh models" to pull the current list from {{ p.label }}.
+          </p>
         </div>
       </div>
 
@@ -86,6 +116,23 @@ async function onTest() {
   await store.testAll()
 }
 
+function onToggleProvider(providerId) {
+  const opening = openProvider.value !== providerId
+  openProvider.value = opening ? providerId : null
+  // Auto-fetch the live model list the first time this provider's panel
+  // is opened, but only if a key is already saved (an "active" provider) —
+  // no point calling the provider's API with no key.
+  if (opening && form.value[providers.find(p => p.id === providerId)?.keyField] && !store.modelOptions[providerId]) {
+    store.fetchModelOptions(providerId).catch(() => {})
+  }
+}
+
+async function onRefreshModels(providerId) {
+  try {
+    await store.fetchModelOptions(providerId)
+  } catch { /* error surfaced via store.modelOptionsError */ }
+}
+
 onMounted(load)
 </script>
 
@@ -105,4 +152,14 @@ h3 { font-size: 14px; margin: 0 0 10px; color: var(--di-navy); }
 .di-test-grid { display: flex; flex-direction: column; gap: 8px; }
 .di-test-row { display: flex; align-items: center; gap: 10px; font-size: 13px; text-transform: capitalize; }
 .di-modal-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+.di-model-label-row { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
+.di-model-label-row .di-label { margin: 0; }
+.di-refresh-link {
+  background: none; border: none; padding: 0; margin: 0;
+  color: var(--di-navy); font-size: 12px; font-weight: 600; cursor: pointer;
+  text-decoration: underline;
+}
+.di-refresh-link:disabled { color: var(--di-muted); cursor: not-allowed; text-decoration: none; }
+.di-model-hint { font-size: 12px; color: var(--di-muted); margin: 6px 0 0; }
+.di-model-hint-error { color: #b45309; }
 </style>

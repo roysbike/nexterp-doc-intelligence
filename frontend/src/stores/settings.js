@@ -10,6 +10,9 @@ export const useSettingsStore = defineStore('settings', () => {
   const saving = ref(false)
   const testing = ref(false)
   const error = ref('')
+  const modelOptions = ref({})   // { [providerId]: string[] }
+  const modelOptionsLoading = ref({})  // { [providerId]: boolean }
+  const modelOptionsError = ref({})    // { [providerId]: string }
 
   async function fetchSettings() {
     loading.value = true
@@ -54,5 +57,25 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
-  return { settings, health, testResults, loading, saving, testing, error, fetchSettings, fetchHealth, save, testAll }
+  async function fetchModelOptions(providerId) {
+    modelOptionsLoading.value = { ...modelOptionsLoading.value, [providerId]: true }
+    modelOptionsError.value = { ...modelOptionsError.value, [providerId]: '' }
+    try {
+      const res = await api.getProviderModels(providerId)
+      modelOptions.value = { ...modelOptions.value, [providerId]: res.models || [] }
+      if (res.error) modelOptionsError.value = { ...modelOptionsError.value, [providerId]: res.error }
+      return res
+    } catch (err) {
+      modelOptionsError.value = { ...modelOptionsError.value, [providerId]: err.message }
+      throw err
+    } finally {
+      modelOptionsLoading.value = { ...modelOptionsLoading.value, [providerId]: false }
+    }
+  }
+
+  return {
+    settings, health, testResults, loading, saving, testing, error,
+    modelOptions, modelOptionsLoading, modelOptionsError,
+    fetchSettings, fetchHealth, save, testAll, fetchModelOptions,
+  }
 })

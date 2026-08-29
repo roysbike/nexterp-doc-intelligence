@@ -29,9 +29,9 @@
   {
    "fieldname": "groq_model",
    "label": "Groq Model",
-   "fieldtype": "Select",
-   "options": "llama-3.3-70b-versatile\nllama-3.1-8b-instant\nmixtral-8x7b-32768",
-   "default": "llama-3.3-70b-versatile"
+   "fieldtype": "Data",
+   "default": "llama-3.3-70b-versatile",
+   "description": "Free text \u2014 enter any current model ID for this provider. Example options seen previously: llama-3.3-70b-versatile, llama-3.1-8b-instant, mixtral-8x7b-32768"
   },
   {
    "fieldname": "sb_gemini",
@@ -46,9 +46,9 @@
   {
    "fieldname": "gemini_model",
    "label": "Gemini Model",
-   "fieldtype": "Select",
-   "options": "gemini-2.5-flash\ngemini-2.0-flash\ngemini-1.5-flash",
-   "default": "gemini-2.5-flash"
+   "fieldtype": "Data",
+   "default": "gemini-2.5-flash",
+   "description": "Free text \u2014 enter any current model ID for this provider. Example options seen previously: gemini-2.5-flash, gemini-2.0-flash, gemini-1.5-flash"
   },
   {
    "fieldname": "sb_cerebras",
@@ -63,9 +63,9 @@
   {
    "fieldname": "cerebras_model",
    "label": "Cerebras Model",
-   "fieldtype": "Select",
-   "options": "llama3.1-70b\nllama3.1-8b",
-   "default": "llama3.1-70b"
+   "fieldtype": "Data",
+   "default": "llama3.1-70b",
+   "description": "Free text \u2014 enter any current model ID for this provider. Example options seen previously: llama3.1-70b, llama3.1-8b"
   },
   {
    "fieldname": "sb_openrouter",
@@ -96,9 +96,9 @@
   {
    "fieldname": "mistral_model",
    "label": "Mistral Model",
-   "fieldtype": "Select",
-   "options": "mistral-small-latest\nmistral-medium-latest\ncodestral-latest",
-   "default": "mistral-small-latest"
+   "fieldtype": "Data",
+   "default": "mistral-small-latest",
+   "description": "Free text \u2014 enter any current model ID for this provider. Example options seen previously: mistral-small-latest, mistral-medium-latest, codestral-latest"
   },
   {
    "fieldname": "sb_claude",
@@ -113,9 +113,9 @@
   {
    "fieldname": "claude_model",
    "label": "Claude Model",
-   "fieldtype": "Select",
-   "options": "claude-haiku-4-5-20251001\nclaude-sonnet-4-6",
-   "default": "claude-haiku-4-5-20251001"
+   "fieldtype": "Data",
+   "default": "claude-haiku-4-5-20251001",
+   "description": "Free text \u2014 enter any current model ID for this provider. Example options seen previously: claude-haiku-4-5-20251001, claude-sonnet-4-6"
   },
   {
    "fieldname": "sb_openai",
@@ -130,9 +130,9 @@
   {
    "fieldname": "openai_model",
    "label": "OpenAI Model",
-   "fieldtype": "Select",
-   "options": "gpt-4o-mini\ngpt-4o\ngpt-4.1-mini",
-   "default": "gpt-4o-mini"
+   "fieldtype": "Data",
+   "default": "gpt-4o-mini",
+   "description": "Free text \u2014 enter any current model ID for this provider. Example options seen previously: gpt-4o-mini, gpt-4o, gpt-4.1-mini"
   },
   {
    "fieldname": "sb_deepseek",
@@ -147,9 +147,9 @@
   {
    "fieldname": "deepseek_model",
    "label": "DeepSeek Model",
-   "fieldtype": "Select",
-   "options": "deepseek-chat\ndeepseek-reasoner",
-   "default": "deepseek-chat"
+   "fieldtype": "Data",
+   "default": "deepseek-chat",
+   "description": "Free text \u2014 enter any current model ID for this provider. Example options seen previously: deepseek-chat, deepseek-reasoner"
   },
   {
    "fieldname": "sb_saas",

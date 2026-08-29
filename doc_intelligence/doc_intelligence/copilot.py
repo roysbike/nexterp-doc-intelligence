@@ -44,6 +44,47 @@ EXCLUDED_FIELDTYPES = {
 
 STANDARD_FIELDS = {"name", "owner", "creation", "modified", "modified_by", "docstatus", "idx"}
 
+# Keyword hints used to narrow which DocTypes' full field schema actually
+# needs to go into the planner prompt for a given question. Every allow-listed
+# DocType (20 of them) has a real ERPNext schema — Sales Invoice alone has
+# 100+ fields — so sending all of them on every question, regardless of what
+# was asked, produces a prompt large enough to trip provider per-request size
+# limits (seen as a 413 on Groq) even on questions like "show unpaid invoices"
+# that only ever needed one or two DocTypes' worth of fields.
+_DOCTYPE_KEYWORDS = {
+    "Sales Invoice": ["sales invoice", "invoice", "unpaid", "overdue", "receivable", "bill"],
+    "Purchase Invoice": ["purchase invoice", "vendor invoice", "supplier invoice", "payable", "bill"],
+    "Sales Order": ["sales order", "so-", "order"],
+    "Purchase Order": ["purchase order", "po-", "procure"],
+    "Quotation": ["quotation", "quote"],
+    "Delivery Note": ["delivery", "shipment", "dispatch"],
+    "Purchase Receipt": ["purchase receipt", "grn", "goods receipt"],
+    "Payment Entry": ["payment", "paid", "receivable", "payable"],
+    "Material Request": ["material request", "requisition"],
+    "Stock Entry": ["stock entry", "stock transfer", "inventory movement"],
+    "Journal Entry": ["journal", "gl entry", "accounting entry"],
+    "Item": ["item", "product", "stock", "inventory", "low-stock", "low stock"],
+    "Customer": ["customer", "client", "buyer"],
+    "Supplier": ["supplier", "vendor"],
+    "Employee": ["employee", "staff", "hr "],
+    "Lead": ["lead"],
+    "Opportunity": ["opportunity", "deal"],
+    "Task": ["task"],
+    "ToDo": ["todo", "to-do", "to do"],
+    "Contact": ["contact"],
+    "Address": ["address"],
+}
+
+
+def _relevant_doctypes(question, candidates):
+    """Narrow candidates down to the ones this question's keywords actually
+    touch. Falls back to the full candidate list when nothing matches (an
+    ambiguous or unusual phrasing shouldn't silently lose access to a
+    doctype — it should just cost more tokens, same as before)."""
+    q = (question or "").lower()
+    matched = [dt for dt in candidates if any(kw in q for kw in _DOCTYPE_KEYWORDS.get(dt, []))]
+    return matched or candidates
+
 ALLOWED_OPERATORS = {
     "=", "!=", "<", ">", "<=", ">=", "like", "not like",
     "in", "not in", "between", "is",
@@ -80,13 +121,14 @@ def _field_schema(doctype):
     return fields
 
 
-def get_schema_context(user=None):
+def get_schema_context(user=None, doctypes=None):
     """Real DocType metadata for every allow-listed DocType installed on this
     site AND readable by the given user — this is what actually gets sent to
-    the LLM, never raw business records."""
+    the LLM, never raw business records. Pass `doctypes` to restrict to a
+    subset (see _relevant_doctypes) — omit to get the full allow-list."""
     user = user or frappe.session.user
     schema = {}
-    for doctype in _installed_doctypes(READ_DOCTYPES):
+    for doctype in _installed_doctypes(doctypes if doctypes is not None else READ_DOCTYPES):
         if not frappe.has_permission(doctype, ptype="read", user=user):
             continue
         schema[doctype] = _field_schema(doctype)
@@ -171,7 +213,7 @@ def _strip_fences(text):
 
 def build_query_plan(question, user=None):
     user = user or frappe.session.user
-    schema = get_schema_context(user)
+    schema = get_schema_context(user, doctypes=_relevant_doctypes(question, READ_DOCTYPES))
     create_schema = get_create_schema_context(user)
     if not schema:
         raise CopilotError(

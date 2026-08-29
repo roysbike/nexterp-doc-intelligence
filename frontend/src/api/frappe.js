@@ -183,6 +183,7 @@ export const getProviderHealthStats = () => call(`${APP}.get_provider_health_sta
 export const getProviderSettings = () => call(`${APP}.get_provider_settings`).then(r => r.message)
 export const saveProviderSettings = (settings) => call(`${APP}.save_provider_settings`, { settings }).then(r => r.message)
 export const testProviders = () => call(`${APP}.test_providers`).then(r => r.message)
+export const getProviderModels = (provider) => call(`${APP}.get_provider_models`, { provider }).then(r => r.message)
 
 export const createPurchaseInvoice   = (doc_name) => call(`${APP}.create_purchase_invoice`, { doc_name }).then(r => r.message)
 export const createPurchaseInvoiceDoc = (payload) => call(`${APP}.create_purchase_invoice_doc`, payload).then(r => r.message)

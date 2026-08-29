@@ -2,6 +2,7 @@ import frappe
 import time
 import json
 import re
+import hashlib
 
 
 def _strip_json_fences(text):
@@ -33,6 +34,49 @@ class _ProviderError(Exception):
 
 def _get_settings():
     return frappe.get_single("Doc Intelligence Settings")
+
+
+# Model names containing these tokens aren't chat/text models (audio
+# transcription, TTS, moderation, prompt-guard, embeddings) so they're
+# filtered out of the dropdown — selecting one would break extraction.
+_NON_CHAT_MODEL_KEYWORDS = ("whisper", "guard", "orpheus", "tts", "embed", "moderation")
+
+
+def list_provider_models(provider_id):
+    """Fetch the live list of model IDs this provider's API key can access,
+    straight from the provider's own /models endpoint — never hardcoded,
+    so it can't go stale the way the old Select field options did."""
+    settings = _get_settings()
+    provider = next((p for p in PROVIDERS if p["id"] == provider_id), None)
+    if not provider:
+        frappe.throw(f"Unknown provider: {provider_id}")
+
+    key = settings.get_password(provider["key_field"])
+    if not key:
+        return {"models": [], "error": "Add an API key for this provider first, then save, then refresh models."}
+
+    cache_key = f"di_models:{provider_id}:{hashlib.md5(key.encode()).hexdigest()[:12]}"
+    cached = frappe.cache().get_value(cache_key)
+    if cached:
+        return {"models": json.loads(cached), "cached": True}
+
+    try:
+        if provider["openai_compat"]:
+            from openai import OpenAI
+            client = OpenAI(api_key=key, base_url=provider["base_url"], timeout=20.0, max_retries=0)
+            resp = client.models.list()
+            ids = [m.id for m in resp.data]
+        else:
+            import anthropic
+            client = anthropic.Anthropic(api_key=key, timeout=20.0, max_retries=0)
+            resp = client.models.list()
+            ids = [m.id for m in resp.data]
+    except Exception as e:
+        return {"models": [], "error": str(e)[:200]}
+
+    ids = sorted({m for m in ids if not any(k in m.lower() for k in _NON_CHAT_MODEL_KEYWORDS)})
+    frappe.cache().set_value(cache_key, json.dumps(ids), expires_in_sec=3600)
+    return {"models": ids}
 
 
 def _get_provider_config(settings, tenant_name=None):
@@ -137,7 +181,10 @@ def llm_call(prompt, system="You are a helpful AI assistant.", max_tokens=2000, 
             return result
         except (_RateLimitError, _ProviderError) as e:
             _log_provider_call(p["id"], False, 0, e)
-            tried.append(f"{p['id']} ({type(e).__name__})")
+            detail = str(e).strip().replace("\n", " ")
+            if len(detail) > 160:
+                detail = detail[:160] + "…"
+            tried.append(f"{p['id']} ({type(e).__name__}: {detail})" if detail else f"{p['id']} ({type(e).__name__})")
             fallback_used = True
             if isinstance(e, _RateLimitError):
                 time.sleep(0.3)
@@ -358,7 +405,10 @@ def vision_extract_text(image_path, tenant_name=None, max_tokens=4000):
                 break
             except _ProviderError as e:
                 _log_provider_call(p["id"], False, 0, e)
-                tried.append(f"{p['id']} ({type(e).__name__})")
+                detail = str(e).strip().replace("\n", " ")
+                if len(detail) > 160:
+                    detail = detail[:160] + "…"
+                tried.append(f"{p['id']} ({type(e).__name__}: {detail})" if detail else f"{p['id']} ({type(e).__name__})")
                 break
     frappe.throw(f"All vision providers exhausted. Tried: {', '.join(tried)}. "
                  f"If this is a Gemini free-tier quota limit, wait a minute and retry, "

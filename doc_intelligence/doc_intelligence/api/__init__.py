@@ -178,6 +178,14 @@ def save_provider_settings(settings):
 
 
 @frappe.whitelist()
+def get_provider_models(provider):
+    if "System Manager" not in frappe.get_roles():
+        frappe.throw("Only System Manager can view provider settings.", frappe.PermissionError)
+    from doc_intelligence.doc_intelligence.llm_engine import list_provider_models
+    return list_provider_models(provider)
+
+
+@frappe.whitelist()
 def test_providers():
     if "System Manager" not in frappe.get_roles():
         frappe.throw("Only System Manager can test providers.", frappe.PermissionError)
