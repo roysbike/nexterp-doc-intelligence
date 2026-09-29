@@ -92,10 +92,11 @@ jobs:
           sed -i "/redis/d" Procfile
 
       - name: Link doc_intelligence into the bench
+        working-directory: frappe-bench
         run: |
-          ln -s "$GITHUB_WORKSPACE/doc_intelligence" frappe-bench/apps/doc_intelligence
-          cd frappe-bench
-          pip install --no-cache-dir -q -U -e apps/doc_intelligence
+          ln -s "$GITHUB_WORKSPACE/doc_intelligence" apps/doc_intelligence
+          ./env/bin/pip install --no-cache-dir -U -e apps/doc_intelligence
+          ./env/bin/python -c "import doc_intelligence.hooks; print(doc_intelligence.__file__)"
 
       - name: New site
         working-directory: frappe-bench
