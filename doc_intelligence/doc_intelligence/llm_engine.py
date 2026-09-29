@@ -110,19 +110,26 @@ def _log_provider_call(provider_id, success, tokens, error=None):
         pass
 
 
+def _completion_token_limit(provider, model, max_tokens):
+    """gpt-5 and o-series reject max_tokens and return an empty completion."""
+    if provider["id"] == "openai" and str(model or "").lower().startswith(("gpt-5", "o1", "o3", "o4")):
+        return {"max_completion_tokens": max_tokens}
+    return {"max_tokens": max_tokens}
+
+
 def _call_openai_compat(provider, prompt, system, max_tokens, settings):
     from openai import OpenAI, RateLimitError, APIStatusError
     key = provider.get("_override_key") or provider.get("_key") or settings.get_password(provider["key_field"])
     model = getattr(settings, provider["model_field"], None) or provider["default_model"]
     extra_headers = {}
     if provider["id"] == "openrouter":
-        extra_headers = {"HTTP-Referer": "https://github.com/aravindsprint/doc_intelligence", "X-Title": "Doc Intelligence"}
+        extra_headers = {"HTTP-Referer": "https://github.com/roysbike/nexterp-doc-intelligence", "X-Title": "Doc Intelligence"}
     try:
         client = OpenAI(api_key=key, base_url=provider["base_url"], default_headers=extra_headers, timeout=90.0, max_retries=1)
         resp = client.chat.completions.create(
             model=model,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
+            **_completion_token_limit(provider, model, max_tokens),
         )
         text = resp.choices[0].message.content
         tokens_in = getattr(resp.usage, "prompt_tokens", 0)
@@ -192,17 +199,32 @@ def llm_call(prompt, system="You are a helpful AI assistant.", max_tokens=2000, 
     frappe.throw(f"All LLM providers exhausted. Tried: {', '.join(tried)}")
 
 
-def analyse_document(raw_text, document_type, tenant_name=None, max_tokens=2000):
-    prompt = f"""Analyse this document (category: {document_type}) and return a JSON object with these exact keys:
-- "summary": string, 3-5 sentence summary of purpose, parties, and key points
-- "entities": string, bullet list of key names/orgs/dates/amounts/clauses found
-- "tables": array of objects, each with "headers" (array of strings) and "rows" (array of arrays). Empty array if no tables found.
+def analyse_document(raw_text, document_type, tenant_name=None, max_tokens=2000, source_format=None):
+    from doc_intelligence.doc_intelligence.prompts import get_analysis_prompt
+    rules = get_analysis_prompt()
+    source = source_format or "unknown"
+    prompt = f"""{rules}
+
+Document category: {document_type}
+Source format: {source}
+
+Return a JSON object with these exact keys:
+- "summary": string, 3-5 sentences in Russian: what the document is, who the parties are, and whether the mandatory tax-invoice fields are present
+- "entities": string, bullet list of names, TRNs, dates, amounts, and currency actually printed
+- "tables": array of objects, each with "headers" (array of strings) and "rows" (array of arrays). Empty array if no tables found. Include only real charged lines.
+- "accounting": object with these keys, using null when the value is not printed:
+  document_kind, supplier_name, supplier_address, supplier_trn,
+  buyer_name, buyer_address, buyer_trn,
+  invoice_number, invoice_date, supply_date, due_date, currency,
+  lines (array of description, qty, rate, amount, vat_rate, vat_amount),
+  taxable_amount, vat_amount, grand_total, vat_rate_stated,
+  missing_mandatory (array of strings), warnings (array of strings)
 
 Document text:
 ---
 {raw_text[:12000]}
 ---"""
-    system = "You are an expert document analyst. Extract structured information accurately."
+    system = "You are an expert document analyst for UAE bookkeeping. Extract only what is printed. Return valid JSON."
     result = llm_call(prompt, system, max_tokens, tenant_name, json_mode=True)
     try:
         parsed = json.loads(_strip_json_fences(result["text"]))
@@ -280,8 +302,10 @@ def get_provider_health():
 import base64
 import os
 
-# Providers in PROVIDERS that can actually read images.
-_VISION_PROVIDER_IDS = {"gemini", "claude", "openrouter"}
+# Providers in PROVIDERS that can actually read images. OpenAI is included
+# because the selected model may accept images; a text-only model still fails
+# at request time and the next vision provider is tried.
+_VISION_PROVIDER_IDS = {"gemini", "claude", "openrouter", "openai"}
 
 _VISION_SYSTEM = (
     "You are an OCR and document-transcription engine. Transcribe ALL text "
@@ -312,7 +336,7 @@ def _vision_call_openai_compat(provider, image_b64, mime, max_tokens, settings):
     model = getattr(settings, provider["model_field"], None) or provider["default_model"]
     extra_headers = {}
     if provider["id"] == "openrouter":
-        extra_headers = {"HTTP-Referer": "https://github.com/aravindsprint/doc_intelligence", "X-Title": "Doc Intelligence"}
+        extra_headers = {"HTTP-Referer": "https://github.com/roysbike/nexterp-doc-intelligence", "X-Title": "Doc Intelligence"}
     try:
         client = OpenAI(api_key=key, base_url=provider["base_url"], default_headers=extra_headers, timeout=90.0, max_retries=1)
         resp = client.chat.completions.create(
@@ -324,7 +348,7 @@ def _vision_call_openai_compat(provider, image_b64, mime, max_tokens, settings):
                     {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_b64}"}},
                 ]},
             ],
-            max_tokens=max_tokens,
+            **_completion_token_limit(provider, model, max_tokens),
         )
         text = resp.choices[0].message.content
         return {"text": text, "provider": provider["id"], "model": model,
@@ -371,8 +395,8 @@ def vision_extract_text(image_path, tenant_name=None, max_tokens=4000):
     providers = [p for p in all_providers if p["id"] in _VISION_PROVIDER_IDS]
     if not providers:
         frappe.throw(
-            "No vision-capable LLM provider configured. Add a Gemini or Claude "
-            "API key in Doc Intelligence Settings to process images."
+        "No vision-capable LLM provider configured. Add an OpenRouter, Gemini, "
+        "Claude, or OpenAI key in Doc Intelligence Settings to process images."
         )
 
     # image_path is not raw user input; it's constructed by extract_text()

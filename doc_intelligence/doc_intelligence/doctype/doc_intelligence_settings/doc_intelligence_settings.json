@@ -173,10 +173,17 @@
    "fieldtype": "Section Break"
   },
   {
+   "fieldname": "analysis_prompt",
+   "label": "Analysis Prompt",
+   "fieldtype": "Long Text",
+   "description": "Rules for reading invoices and other source documents. Leave empty to use the built-in UAE VAT checklist. The file text is appended automatically."
+  },
+  {
    "fieldname": "max_tokens_per_request",
    "label": "Max Tokens Per Request",
    "fieldtype": "Int",
-   "default": 2000
+   "default": 4000,
+   "description": "Analysis uses at least 4000 so a multi-line invoice is not cut off."
   }
  ],
  "permissions": [

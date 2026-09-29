@@ -14,5 +14,6 @@ setup(
         "anthropic>=0.25.0",
         "pypdf>=4.0.0",
         "python-docx>=1.0.0",
+        "pymupdf>=1.24.0",
     ],
 )

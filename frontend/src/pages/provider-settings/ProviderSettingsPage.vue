@@ -14,6 +14,18 @@
         <input v-model.number="form.max_tokens_per_request" type="number" class="di-input" style="max-width:120px" />
       </div>
 
+      <div class="di-card">
+        <h3>Analysis prompt</h3>
+        <p class="di-model-hint">
+          Правила разбора счетов и других первичных документов. Текст файла дописывается сам.
+          Очисти поле и сохрани, чтобы вернуть встроенный список по НДС ОАЭ.
+        </p>
+        <textarea v-model="form.analysis_prompt" class="di-input di-prompt" rows="16"></textarea>
+        <button type="button" class="di-btn secondary di-prompt-reset" @click="form.analysis_prompt = form.default_analysis_prompt">
+          Reset to built-in prompt
+        </button>
+      </div>
+
       <div v-if="store.testResults" class="di-card">
         <h3>Test Results</h3>
         <div class="di-test-grid">
@@ -162,4 +174,13 @@ h3 { font-size: 14px; margin: 0 0 10px; color: var(--di-navy); }
 .di-refresh-link:disabled { color: var(--di-muted); cursor: not-allowed; text-decoration: none; }
 .di-model-hint { font-size: 12px; color: var(--di-muted); margin: 6px 0 0; }
 .di-model-hint-error { color: #b45309; }
+.di-prompt {
+  width: 100%;
+  min-height: 280px;
+  margin-top: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.di-prompt-reset { margin-top: 8px; }
 </style>

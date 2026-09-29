@@ -27,6 +27,13 @@
    "in_list_view": 1
   },
   {
+   "fieldname": "source_format",
+   "label": "Source Format",
+   "fieldtype": "Data",
+   "read_only": 1,
+   "description": "How the file was read: pdf-text, pdf-scan, docx, jpeg, png, and so on."
+  },
+  {
    "fieldname": "status",
    "label": "Status",
    "fieldtype": "Select",

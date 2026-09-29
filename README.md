@@ -10,7 +10,7 @@ Everything is self-hosted: your documents and your API keys stay on your own Fra
 
 **Doc Intelligence supports Frappe / ERPNext v14, v15, and v16** — all from this one branch, no
 version-specific branch to pick. `bench get-app doc_intelligence
-https://github.com/aravindsprint/doc_intelligence` works the same way regardless of which of the
+https://github.com/roysbike/nexterp-doc-intelligence` works the same way regardless of which of the
 three your bench is running.
 
 CI (`.github/workflows/ci.yml`) builds and runs the test suite against Frappe v14, v15, and v16 on
@@ -19,7 +19,9 @@ every push, so compatibility is verified continuously rather than just claimed.
 ## Features
 
 **Document intelligence**
-- Analyses PDF, DOCX, and image files (JPG/PNG/WEBP/GIF via AI-based OCR)
+- Detects the file itself: PDF with a text layer, scanned PDF, DOCX (including tables), TXT/CSV, and images (JPG/PNG/WEBP/GIF/TIFF/BMP)
+- A scanned PDF is rendered and read by a vision model. An empty text layer is not sent to the model as a blank document
+- Editable analysis prompt in Provider Settings, with a built-in UAE VAT tax-invoice checklist
 - Automatic summary, key entities/parties, dates, amounts, and clauses
 - Extracts and renders tabular data (e.g. invoice line items) found in documents
 - Answers free-text questions about any uploaded document
@@ -59,13 +61,34 @@ Classic Frappe custom app + decoupled Vue 3 SPA:
 
 See `DEPLOY.md` for build/deploy steps.
 
+## Разбор файла и промпт
+
+Тип файла определяется сам, по расширению и по заголовку файла. В карточке документа это поле `source_format`.
+
+| Файл | Как читается | Что видно в карточке |
+| --- | --- | --- |
+| PDF с текстовым слоем | Текст достаётся локально, без модели | `pdf-text` |
+| PDF-скан, в котором нельзя выделить строки | Страницы рисуются и отправляются в vision-модель | `pdf-scan` |
+| JPG, PNG, WEBP, GIF | Сразу в vision-модель | `jpeg`, `png`, `webp`, `gif` |
+| TIFF, BMP | Сначала в JPEG, затем в vision-модель | `tiff`, `bmp` |
+| DOCX | Абзацы и ячейки таблиц | `docx` |
+| TXT, CSV | Как текст | `text`, `csv` |
+
+Старый Word `.doc` не читается. Сохрани его как DOCX или PDF. Скан длиннее 8 страниц обрезается, в тексте будет пометка, сколько страниц пропущено.
+
+Для скана нужен провайдер, который видит картинку: OpenRouter, Gemini, Claude или OpenAI с моделью, принимающей изображения. Модель вроде бесплатной Llama картинку не прочитает, и документ станет Failed с текстом причины в сводке.
+
+Промпт правится в `/doc-intelligence/provider-settings`, блок **Analysis prompt**, и в Desk: Doc Intelligence Settings → Analysis Prompt. Пустое поле при сохранении возвращает встроенный список. Этот список проверяет поля налогового счёта ОАЭ (Tax Invoice, стороны, TRN, номер, дата, строки, ставка и сумма НДС, итог), запрещает додумывать отсутствующие цифры и не считает PDF электронным инвойсом или сдачей в FTA. Текст файла к промпту дописывается сам, ключи JSON менять не нужно.
+
+Разбор ответа использует не меньше 4000 токенов, чтобы таблица строк не обрывалась. Кнопка Purchase Invoice больше не требует вручную передать дату оплаты и примечание: пустая дата оплаты берётся из даты счёта, валюта и счёт расходов берутся из выбранной компании.
+
 ## Installation
 
 ```bash
-bench get-app doc_intelligence https://github.com/aravindsprint/doc_intelligence
+bench get-app doc_intelligence https://github.com/roysbike/nexterp-doc-intelligence
 bench --site yoursite.localhost install-app doc_intelligence
 bench --site yoursite.localhost migrate
-pip install openai anthropic pypdf python-docx --break-system-packages
+pip install openai anthropic pypdf python-docx pymupdf --break-system-packages
 cd apps/doc_intelligence/frontend && yarn install && yarn build
 cd ~/frappe-bench
 bench build --app doc_intelligence

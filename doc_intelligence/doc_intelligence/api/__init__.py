@@ -144,6 +144,8 @@ def get_provider_settings():
     if "System Manager" not in frappe.get_roles():
         frappe.throw("Only System Manager can view provider settings.", frappe.PermissionError)
     settings = frappe.get_single("Doc Intelligence Settings")
+    from doc_intelligence.doc_intelligence.prompts import DEFAULT_ANALYSIS_PROMPT
+    default_prompt = DEFAULT_ANALYSIS_PROMPT.strip()
     def mask(val): return "xxxxxx" if val else ""
     return {
         "enabled_providers": settings.enabled_providers or "groq,gemini,cerebras,openrouter,mistral,claude",
@@ -155,8 +157,10 @@ def get_provider_settings():
         "claude_api_key": mask(settings.claude_api_key), "claude_model": settings.claude_model,
         "openai_api_key": mask(settings.openai_api_key), "openai_model": settings.openai_model,
         "deepseek_api_key": mask(settings.deepseek_api_key), "deepseek_model": settings.deepseek_model,
-        "max_tokens_per_request": settings.max_tokens_per_request or 2000,
+        "max_tokens_per_request": settings.max_tokens_per_request or 4000,
         "platform_name": settings.platform_name, "support_email": settings.support_email,
+        "analysis_prompt": (settings.get("analysis_prompt") or "").strip() or default_prompt,
+        "default_analysis_prompt": default_prompt,
     }
 
 
@@ -220,16 +224,21 @@ def create_purchase_invoice(doc_name):
     # Get default company info for context
     default_company = frappe.defaults.get_global_default("company") or ""
     
+    from doc_intelligence.doc_intelligence.prompts import get_analysis_prompt
+    rules = get_analysis_prompt()
     prompt = f"""You are an ERPNext expert. Extract Purchase Invoice fields from this invoice document text.
+
+Follow these accounting rules. Do not invent a value that is not printed:
+{rules}
 
 Return ONLY a valid JSON object with these exact keys (use null for fields not found):
 {{
   "supplier_name": "exact supplier/vendor name as shown",
   "bill_no": "invoice number / bill number",
   "bill_date": "invoice date in YYYY-MM-DD format",
-  "posting_date": "today or invoice date in YYYY-MM-DD format", 
+  "posting_date": "invoice date in YYYY-MM-DD format, null if the date is not printed",
   "due_date": "due date or payment due date in YYYY-MM-DD format, null if not found",
-  "currency": "currency code like INR, USD etc, default INR",
+  "currency": "currency code printed on the document, null if it is not printed",
   "items": [
     {{
       "item_name": "description of item/service",
@@ -335,13 +344,19 @@ Return only the JSON, no explanation."""
 
 
 @frappe.whitelist()
-def create_purchase_invoice_doc(supplier, bill_no, bill_date, posting_date, due_date,
-                                 company, currency, items, remarks, naming_series,
-                                 confirm_duplicate=0):
+def create_purchase_invoice_doc(supplier, bill_no=None, bill_date=None, posting_date=None,
+                                 company=None, currency=None, items=None, naming_series=None,
+                                 due_date=None, remarks=None, confirm_duplicate=0):
     import json
 
     if isinstance(items, str):
         items = json.loads(items)
+    items = items or []
+
+    invoice_date = posting_date or bill_date or frappe.utils.nowdate()
+    posting_date = posting_date or invoice_date
+    bill_date = bill_date or invoice_date
+    due_date = due_date or posting_date
 
     # Hard safety net: block an exact-duplicate bill_no+supplier unless the
     # user has explicitly confirmed they want to proceed anyway (the
@@ -357,7 +372,16 @@ def create_purchase_invoice_doc(supplier, bill_no, bill_date, posting_date, due_
                 f"supplier ({existing}). Pass confirm_duplicate=1 to create it anyway."
             )
 
-    expense_account = frappe.db.get_value("Company", company, "default_expense_account") or "Cost of Goods Sold - PSS"
+    if not company:
+        frappe.throw("Select a company before creating the Purchase Invoice.")
+    expense_account = frappe.db.get_value("Company", company, "default_expense_account")
+    if not expense_account:
+        frappe.throw(
+            f"Company {company} has no Default Expense Account. "
+            "Set it on the Company form, then create the invoice again."
+        )
+    if not currency:
+        currency = frappe.db.get_value("Company", company, "default_currency")
 
     pi_items = []
     for item in items:
@@ -370,19 +394,22 @@ def create_purchase_invoice_doc(supplier, bill_no, bill_date, posting_date, due_
             "expense_account": expense_account,
         })
 
-    doc = frappe.get_doc({
+    payload = {
         "doctype": "Purchase Invoice",
-        "naming_series": naming_series or "PINV26/.#####",
         "supplier": supplier,
         "bill_no": bill_no,
         "bill_date": bill_date,
         "posting_date": posting_date,
-        "due_date": due_date or posting_date,
+        "due_date": due_date,
         "company": company,
-        "currency": currency or "INR",
+        "currency": currency,
         "items": pi_items,
-        "custom_pending_remarks": remarks or "Created via Doc Intelligence",
-    })
+    }
+    if naming_series:
+        payload["naming_series"] = naming_series
+    if remarks:
+        payload["remarks"] = remarks
+    doc = frappe.get_doc(payload)
     doc.insert(ignore_mandatory=True)
     # Commits immediately after insert() so the newly-created draft record is
     # durably saved before the API response returns and the frontend navigates

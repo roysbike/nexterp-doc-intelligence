@@ -10,6 +10,7 @@
         <div class="di-detail-meta">
           <span class="di-badge" :class="doc.status.toLowerCase()">{{ doc.status }}</span>
           <span>{{ doc.document_type }}</span>
+          <span v-if="doc.source_format">{{ doc.source_format }}</span>
           <span v-if="doc.provider_used">via {{ doc.provider_used }}</span>
           <span v-if="doc.token_count">{{ doc.token_count }} tokens</span>
         </div>
