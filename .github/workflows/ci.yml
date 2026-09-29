@@ -105,6 +105,7 @@ jobs:
             --db-root-password root \
             --admin-password admin \
             --no-mariadb-socket
+          grep -qxF doc_intelligence sites/apps.txt || echo doc_intelligence >> sites/apps.txt
 
       - name: Install doc_intelligence on test site
         working-directory: frappe-bench
