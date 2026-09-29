@@ -105,7 +105,7 @@ jobs:
             --db-root-password root \
             --admin-password admin \
             --no-mariadb-socket
-          grep -qxF doc_intelligence sites/apps.txt || echo doc_intelligence >> sites/apps.txt
+          ./env/bin/python -c "from pathlib import Path; p = Path('sites/apps.txt'); apps = [a.strip() for a in p.read_text().splitlines() if a.strip()]; apps.append('doc_intelligence') if 'doc_intelligence' not in apps else None; p.write_text('\n'.join(apps) + '\n')"
 
       - name: Install doc_intelligence on test site
         working-directory: frappe-bench
