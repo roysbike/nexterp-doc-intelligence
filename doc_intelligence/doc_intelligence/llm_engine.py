@@ -110,6 +110,89 @@ def _log_provider_call(provider_id, success, tokens, error=None):
         pass
 
 
+# UAE dirham is pegged at 3.6725 per US dollar. OpenRouter reports usage.cost in USD.
+AED_PER_USD = 3.6725
+
+
+def begin_usage():
+    """Start summing tokens and provider cost for the current job."""
+    frappe.local.di_usage = {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "priced": False}
+
+
+def take_usage():
+    """Return the summed usage and stop recording."""
+    bucket = getattr(frappe.local, "di_usage", None)
+    frappe.local.di_usage = None
+    if not isinstance(bucket, dict):
+        return {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "priced": False}
+    return bucket
+
+
+def aed_per_usd():
+    """Dirhams per dollar from settings, or the official peg when unset."""
+    try:
+        rate = float(_get_settings().get("aed_per_usd") or 0)
+    except Exception:
+        rate = 0
+    return rate if rate > 0 else AED_PER_USD
+
+
+def _note_usage(result):
+    bucket = getattr(frappe.local, "di_usage", None)
+    if not isinstance(bucket, dict) or not isinstance(result, dict):
+        return
+    bucket["tokens_in"] += int(result.get("tokens_in") or 0)
+    bucket["tokens_out"] += int(result.get("tokens_out") or 0)
+    if result.get("cost_usd") is not None:
+        bucket["cost_usd"] += float(result["cost_usd"])
+        bucket["priced"] = True
+
+
+def _raw_response_json(raw):
+    response = getattr(raw, "http_response", None)
+    text = getattr(response, "text", None) if response is not None else None
+    if text is None and response is not None:
+        content = getattr(response, "content", b"") or b""
+        if isinstance(content, bytes):
+            text = content.decode("utf-8", errors="replace")
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except Exception:
+        return None
+
+
+def _chat_create(client, provider, **kwargs):
+    """Return (parsed response, raw JSON). OpenRouter's USD cost is only in the raw body."""
+    if provider["id"] != "openrouter":
+        return client.chat.completions.create(**kwargs), None
+    raw = client.chat.completions.with_raw_response.create(**kwargs)
+    return raw.parse(), _raw_response_json(raw)
+
+
+def _usage_from(resp, body):
+    usage = getattr(resp, "usage", None)
+    raw_usage = {}
+    if isinstance(body, dict) and isinstance(body.get("usage"), dict):
+        raw_usage = body["usage"]
+    tokens_in = int(getattr(usage, "prompt_tokens", 0) or raw_usage.get("prompt_tokens") or 0)
+    tokens_out = int(getattr(usage, "completion_tokens", 0) or raw_usage.get("completion_tokens") or 0)
+    cost = raw_usage.get("cost")
+    if cost is None and usage is not None:
+        cost = getattr(usage, "cost", None)
+        extra = getattr(usage, "model_extra", None) or {}
+        if cost is None and isinstance(extra, dict):
+            cost = extra.get("cost")
+    cost_usd = None
+    if cost is not None:
+        try:
+            cost_usd = float(cost)
+        except (TypeError, ValueError):
+            cost_usd = None
+    return tokens_in, tokens_out, cost_usd
+
+
 def _completion_token_limit(provider, model, max_tokens):
     """gpt-5 and o-series reject max_tokens and return an empty completion."""
     if provider["id"] == "openai" and str(model or "").lower().startswith(("gpt-5", "o1", "o3", "o4")):
@@ -126,15 +209,16 @@ def _call_openai_compat(provider, prompt, system, max_tokens, settings):
         extra_headers = {"HTTP-Referer": "https://github.com/roysbike/nexterp-doc-intelligence", "X-Title": "Doc Intelligence"}
     try:
         client = OpenAI(api_key=key, base_url=provider["base_url"], default_headers=extra_headers, timeout=90.0, max_retries=1)
-        resp = client.chat.completions.create(
+        resp, body = _chat_create(
+            client, provider,
             model=model,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
             **_completion_token_limit(provider, model, max_tokens),
         )
         text = resp.choices[0].message.content
-        tokens_in = getattr(resp.usage, "prompt_tokens", 0)
-        tokens_out = getattr(resp.usage, "completion_tokens", 0)
-        return {"text": text, "provider": provider["id"], "model": model, "tokens_in": tokens_in, "tokens_out": tokens_out}
+        tokens_in, tokens_out, cost_usd = _usage_from(resp, body)
+        return {"text": text, "provider": provider["id"], "model": model,
+                "tokens_in": tokens_in, "tokens_out": tokens_out, "cost_usd": cost_usd}
     except RateLimitError as e:
         raise _RateLimitError(str(e))
     except APIStatusError as e:
@@ -160,7 +244,8 @@ def _call_claude(provider, prompt, system, max_tokens, settings):
         text = resp.content[0].text
         tokens_in = resp.usage.input_tokens
         tokens_out = resp.usage.output_tokens
-        return {"text": text, "provider": "claude", "model": model, "tokens_in": tokens_in, "tokens_out": tokens_out}
+        return {"text": text, "provider": "claude", "model": model,
+                "tokens_in": tokens_in, "tokens_out": tokens_out, "cost_usd": None}
     except anthropic.RateLimitError as e:
         raise _RateLimitError(str(e))
     except Exception as e:
@@ -185,6 +270,7 @@ def llm_call(prompt, system="You are a helpful AI assistant.", max_tokens=2000, 
             _log_provider_call(p["id"], True, result.get("tokens_out", 0))
             result["fallback_used"] = i > 0
             result["attempts"] = i + 1
+            _note_usage(result)
             return result
         except (_RateLimitError, _ProviderError) as e:
             _log_provider_call(p["id"], False, 0, e)
@@ -339,7 +425,8 @@ def _vision_call_openai_compat(provider, image_b64, mime, max_tokens, settings):
         extra_headers = {"HTTP-Referer": "https://github.com/roysbike/nexterp-doc-intelligence", "X-Title": "Doc Intelligence"}
     try:
         client = OpenAI(api_key=key, base_url=provider["base_url"], default_headers=extra_headers, timeout=90.0, max_retries=1)
-        resp = client.chat.completions.create(
+        resp, body = _chat_create(
+            client, provider,
             model=model,
             messages=[
                 {"role": "system", "content": _VISION_SYSTEM},
@@ -351,9 +438,9 @@ def _vision_call_openai_compat(provider, image_b64, mime, max_tokens, settings):
             **_completion_token_limit(provider, model, max_tokens),
         )
         text = resp.choices[0].message.content
+        tokens_in, tokens_out, cost_usd = _usage_from(resp, body)
         return {"text": text, "provider": provider["id"], "model": model,
-                "tokens_in": getattr(resp.usage, "prompt_tokens", 0),
-                "tokens_out": getattr(resp.usage, "completion_tokens", 0)}
+                "tokens_in": tokens_in, "tokens_out": tokens_out, "cost_usd": cost_usd}
     except RateLimitError as e:
         raise _RateLimitError(str(e))
     except APIStatusError as e:
@@ -381,7 +468,8 @@ def _vision_call_claude(provider, image_b64, mime, max_tokens, settings):
         )
         text = resp.content[0].text
         return {"text": text, "provider": "claude", "model": model,
-                "tokens_in": resp.usage.input_tokens, "tokens_out": resp.usage.output_tokens}
+                "tokens_in": resp.usage.input_tokens, "tokens_out": resp.usage.output_tokens,
+                "cost_usd": None}
     except anthropic.RateLimitError as e:
         raise _RateLimitError(str(e))
     except Exception as e:
@@ -419,6 +507,7 @@ def vision_extract_text(image_path, tenant_name=None, max_tokens=4000):
                 else:
                     result = _vision_call_claude(p, image_b64, mime, max_tokens, settings)
                 _log_provider_call(p["id"], True, result.get("tokens_out", 0))
+                _note_usage(result)
                 return result.get("text", "")
             except _RateLimitError as e:
                 if attempt < 2:
@@ -468,7 +557,8 @@ def _vision_call_gemini_native(provider, image_b64, mime, max_tokens, settings):
         usage = data.get("usageMetadata", {})
         return {"text": text, "provider": "gemini", "model": model,
                 "tokens_in": usage.get("promptTokenCount", 0),
-                "tokens_out": usage.get("candidatesTokenCount", 0)}
+                "tokens_out": usage.get("candidatesTokenCount", 0),
+                "cost_usd": None}
     except (_RateLimitError, _ProviderError):
         raise
     except Exception as e:

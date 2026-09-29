@@ -78,8 +78,33 @@ def _as_text(value):
     return str(value)
 
 
+def _store_usage(doc, usage, replace):
+    """Write summed tokens and, when the provider priced the call, the AED cost."""
+    from doc_intelligence.doc_intelligence.llm_engine import aed_per_usd
+    incoming_in = int((usage or {}).get("tokens_in") or 0)
+    incoming_out = int((usage or {}).get("tokens_out") or 0)
+    if replace:
+        doc.prompt_tokens = incoming_in
+        doc.completion_tokens = incoming_out
+    else:
+        doc.prompt_tokens = int(doc.prompt_tokens or 0) + incoming_in
+        doc.completion_tokens = int(doc.completion_tokens or 0) + incoming_out
+    doc.token_count = int(doc.prompt_tokens or 0) + int(doc.completion_tokens or 0)
+    if (usage or {}).get("priced"):
+        added = float(usage.get("cost_usd") or 0)
+        base = 0.0 if replace else float(doc.cost_usd or 0)
+        doc.cost_usd = round(base + added, 6)
+        doc.cost_aed = round(doc.cost_usd * aed_per_usd(), 4)
+    elif replace:
+        doc.cost_usd = None
+        doc.cost_aed = None
+
+
 def process_document(doc_name):
+    from doc_intelligence.doc_intelligence.llm_engine import begin_usage, take_usage
     doc = frappe.get_doc("AI Document", doc_name)
+    usage = None
+    begin_usage()
     try:
         doc.status = "Processing"
         doc.save(ignore_permissions=True)
@@ -112,7 +137,8 @@ def process_document(doc_name):
         tables = result.get("tables", [])
         doc.extracted_table = json.dumps(tables) if tables else ""
         meta = result.get("_meta", {})
-        doc.token_count = meta.get("tokens_out", 0)
+        usage = take_usage()
+        _store_usage(doc, usage, replace=True)
         doc.provider_used = meta.get("provider", "")
         if meta.get("fallback_used"):
             doc.provider_used = f"{meta.get('provider')} (fallback)"
@@ -123,6 +149,8 @@ def process_document(doc_name):
 
     except Exception as exc:
         frappe.log_error(frappe.get_traceback(), f"AI Document processing failed: {doc_name}")
+        if usage is None:
+            usage = take_usage()
         failure_note = str(exc).strip().replace("\n", " ")[:500]
         # This save must never itself be allowed to fail silently — if it
         # does (a validation error, a timestamp race with another worker,
@@ -134,6 +162,8 @@ def process_document(doc_name):
             doc.status = "Failed"
             if failure_note:
                 doc.summary = failure_note
+            if usage:
+                _store_usage(doc, usage, replace=True)
             doc.save(ignore_permissions=True)
             frappe.db.commit()  # nosemgrep: frappe-manual-commit -- failure path must land even if the rest of the job never committed
         except Exception:

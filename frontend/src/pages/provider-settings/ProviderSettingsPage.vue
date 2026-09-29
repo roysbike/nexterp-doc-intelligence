@@ -12,6 +12,8 @@
         </button>
         <span class="di-label" style="margin:0">Max tokens per request</span>
         <input v-model.number="form.max_tokens_per_request" type="number" class="di-input" style="max-width:120px" />
+        <span class="di-label" style="margin:0">AED per USD</span>
+        <input v-model.number="form.aed_per_usd" type="number" step="0.0001" class="di-input" style="max-width:120px" />
       </div>
 
       <div class="di-card">

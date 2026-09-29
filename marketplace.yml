@@ -13,7 +13,7 @@ description: |
   fuzzy party matching, and duplicate-invoice detection built in. Bring your
   own API keys; your documents and keys never leave your own server.
 author: Aravind Govindaraj
-source_link: https://github.com/yourname/doc_intelligence
+source_link: https://github.com/roysbike/nexterp-doc-intelligence
 tags:
   - AI
   - Document Management
@@ -23,10 +23,8 @@ tags:
   - Free
   - Open Source
 screenshots: []
-min_frappe_version: "14.0.0"
+min_frappe_version: "16.0.0"
 supported:
-  - "14"
-  - "15"
   - "16"
-support_link: https://github.com/yourname/doc_intelligence/issues
+support_link: https://github.com/roysbike/nexterp-doc-intelligence/issues
 support_email: aravindsprint@gmail.com

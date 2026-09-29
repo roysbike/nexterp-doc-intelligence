@@ -13,6 +13,7 @@
           <span v-if="doc.source_format">{{ doc.source_format }}</span>
           <span v-if="doc.provider_used">via {{ doc.provider_used }}</span>
           <span v-if="doc.token_count">{{ doc.token_count }} tokens</span>
+          <span v-if="hasCost(doc)">{{ formatAed(doc.cost_aed) }}</span>
         </div>
       </div>
       <div class="di-detail-actions">
@@ -167,6 +168,16 @@ const tableCols = computed(() => {
   const rows = doc.value?.extracted_table_parsed
   return rows && rows.length ? Object.keys(rows[0]) : []
 })
+
+function hasCost(row) {
+  return row && row.cost_aed !== null && row.cost_aed !== undefined && row.cost_aed !== ''
+}
+
+function formatAed(value) {
+  const amount = Number(value)
+  if (Number.isNaN(amount)) return ''
+  return `${amount.toFixed(4)} AED`
+}
 
 async function load() {
   loading.value = true

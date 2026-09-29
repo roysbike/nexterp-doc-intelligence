@@ -21,7 +21,7 @@ def execute(filters=None):
 
     data = frappe.db.sql(
         "SELECT name, title, document_type, status, processed_on, "
-        "token_count, owner, creation "
+        "token_count, cost_aed, owner, creation "
         "FROM `tabAI Document` " + where + " "
         "ORDER BY creation DESC",
         filters, as_dict=True
@@ -31,7 +31,7 @@ def execute(filters=None):
         "SELECT COUNT(*) as total, "
         "SUM(CASE WHEN status='Ready' THEN 1 ELSE 0 END) as ready_count, "
         "SUM(CASE WHEN status='Failed' THEN 1 ELSE 0 END) as failed_count, "
-        "SUM(token_count) as total_tokens "
+        "SUM(token_count) as total_tokens, SUM(cost_aed) as total_cost_aed "
         "FROM `tabAI Document` " + where,
         filters, as_dict=True
     )[0]
@@ -43,6 +43,7 @@ def execute(filters=None):
         {"label":"Status","fieldname":"status","fieldtype":"Data","width":100},
         {"label":"Processed On","fieldname":"processed_on","fieldtype":"Datetime","width":150},
         {"label":"Tokens","fieldname":"token_count","fieldtype":"Int","width":90},
+        {"label":"Cost (AED)","fieldname":"cost_aed","fieldtype":"Float","width":110},
         {"label":"Uploaded By","fieldname":"owner","fieldtype":"Link","options":"User","width":160},
         {"label":"Created","fieldname":"creation","fieldtype":"Datetime","width":150},
     ]

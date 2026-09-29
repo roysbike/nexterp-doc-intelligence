@@ -52,7 +52,36 @@
    "fieldname": "token_count",
    "label": "Token Count",
    "fieldtype": "Int",
+   "read_only": 1,
+   "description": "Input plus output tokens for reading this document and later questions about it."
+  },
+  {
+   "fieldname": "prompt_tokens",
+   "label": "Prompt Tokens",
+   "fieldtype": "Int",
    "read_only": 1
+  },
+  {
+   "fieldname": "completion_tokens",
+   "label": "Completion Tokens",
+   "fieldtype": "Int",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cost_usd",
+   "label": "Cost (USD)",
+   "fieldtype": "Float",
+   "precision": "6",
+   "read_only": 1,
+   "description": "Filled when the provider returns a price, currently OpenRouter usage.cost."
+  },
+  {
+   "fieldname": "cost_aed",
+   "label": "Cost (AED)",
+   "fieldtype": "Float",
+   "precision": "4",
+   "read_only": 1,
+   "description": "USD cost times the AED per USD rate in Doc Intelligence Settings."
   },
   {
    "fieldname": "provider_used",

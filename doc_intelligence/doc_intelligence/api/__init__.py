@@ -18,7 +18,7 @@ def list_documents(status=None, document_type=None, search=None, limit=20, offse
         filters["title"] = ["like", f"%{search}%"]
     docs = frappe.get_list(
         "AI Document", filters=filters,
-        fields=["name","title","document_type","status","processed_on","token_count","provider_used","creation","owner"],
+        fields=["name","title","document_type","status","processed_on","token_count","prompt_tokens","completion_tokens","cost_aed","provider_used","creation","owner"],
         order_by="creation desc", limit=cint(limit), start=cint(offset),
     )
     return {"data": docs, "total": frappe.db.count("AI Document", filters=filters)}
@@ -95,17 +95,23 @@ def upload_document(title, document_type, file_url):
 
 @frappe.whitelist()
 def ask_document(doc_name, question):
-    from doc_intelligence.doc_intelligence.llm_engine import ask_question
+    from doc_intelligence.doc_intelligence.llm_engine import ask_question, begin_usage, take_usage
+    from doc_intelligence.doc_intelligence.doctype.ai_document.ai_document import _store_usage
     doc = frappe.get_doc("AI Document", doc_name)
     if doc.status != "Ready":
         frappe.throw("Document must be in Ready status before asking questions.")
     settings = frappe.get_single("Doc Intelligence Settings")
-    result = ask_question(doc.raw_text, doc.title, doc.document_type, question, frappe.session.user, settings.max_tokens_per_request or 2000)
+    begin_usage()
+    try:
+        result = ask_question(doc.raw_text, doc.title, doc.document_type, question, frappe.session.user, settings.max_tokens_per_request or 2000)
+    finally:
+        usage = take_usage()
     tokens = (result.get("_meta") or {}).get("tokens_out", 0)
     doc.user_question = question
     doc.ai_answer = result.get("answer", "")
+    _store_usage(doc, usage, replace=False)
     doc.save(ignore_permissions=True)
-    return {"answer": doc.ai_answer, "provider": (result.get("_meta") or {}).get("provider"), "tokens": tokens}
+    return {"answer": doc.ai_answer, "provider": (result.get("_meta") or {}).get("provider"), "tokens": tokens, "cost_aed": doc.cost_aed}
 
 
 @frappe.whitelist()
@@ -161,6 +167,7 @@ def get_provider_settings():
         "platform_name": settings.platform_name, "support_email": settings.support_email,
         "analysis_prompt": (settings.get("analysis_prompt") or "").strip() or default_prompt,
         "default_analysis_prompt": default_prompt,
+        "aed_per_usd": settings.get("aed_per_usd") or 3.6725,
     }
 
 

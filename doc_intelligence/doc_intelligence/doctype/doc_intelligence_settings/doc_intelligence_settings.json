@@ -184,6 +184,14 @@
    "fieldtype": "Int",
    "default": 4000,
    "description": "Analysis uses at least 4000 so a multi-line invoice is not cut off."
+  },
+  {
+   "fieldname": "aed_per_usd",
+   "label": "AED per USD",
+   "fieldtype": "Float",
+   "precision": "4",
+   "default": "3.6725",
+   "description": "Converts a provider USD cost into dirhams. 3.6725 is the UAE dirham peg."
   }
  ],
  "permissions": [

@@ -19,12 +19,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - frappe_branch: version-14
-            python_version: "3.11"
-            node_version: "18"
-          - frappe_branch: version-15
-            python_version: "3.11"
-            node_version: "18"
           - frappe_branch: version-16
             python_version: "3.14"
             node_version: "24"

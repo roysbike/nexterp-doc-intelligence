@@ -8,13 +8,13 @@ Everything is self-hosted: your documents and your API keys stay on your own Fra
 
 ## Compatibility
 
-**Doc Intelligence supports Frappe / ERPNext v14, v15, and v16** — all from this one branch, no
-version-specific branch to pick. `bench get-app doc_intelligence
-https://github.com/roysbike/nexterp-doc-intelligence` works the same way regardless of which of the
-three your bench is running.
+This build is for **Frappe / ERPNext v16.x** and Python 3.14. It is not installed on v14 or v15.
 
-CI (`.github/workflows/ci.yml`) builds and runs the test suite against Frappe v14, v15, and v16 on
-every push, so compatibility is verified continuously rather than just claimed.
+```bash
+bench get-app doc_intelligence https://github.com/roysbike/nexterp-doc-intelligence
+```
+
+CI (`.github/workflows/ci.yml`) runs the test suite against the Frappe `version-16` branch.
 
 ## Features
 
@@ -81,6 +81,14 @@ See `DEPLOY.md` for build/deploy steps.
 Промпт правится в `/doc-intelligence/provider-settings`, блок **Analysis prompt**, и в Desk: Doc Intelligence Settings → Analysis Prompt. Пустое поле при сохранении возвращает встроенный список. Этот список проверяет поля налогового счёта ОАЭ (Tax Invoice, стороны, TRN, номер, дата, строки, ставка и сумма НДС, итог), запрещает додумывать отсутствующие цифры и не считает PDF электронным инвойсом или сдачей в FTA. Текст файла к промпту дописывается сам, ключи JSON менять не нужно.
 
 Разбор ответа использует не меньше 4000 токенов, чтобы таблица строк не обрывалась. Кнопка Purchase Invoice больше не требует вручную передать дату оплаты и примечание: пустая дата оплаты берётся из даты счёта, валюта и счёт расходов берутся из выбранной компании.
+
+## Стоимость в AED
+
+На карточке документа, рядом с числом токенов, показывается стоимость в дирхамах. Сумма складывается из распознавания страниц, разбора и последующих вопросов по этому документу.
+
+Цифру в долларах берём из ответа провайдера. OpenRouter отдаёт её в поле `usage.cost` ([Usage Accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting)). Дирхамы считаются как доллары умножить на **AED per USD** в настройках. По умолчанию стоит официальный фиксированный курс **3.6725**. Его можно сменить в том же экране Provider Settings.
+
+Если провайдер цену не присылает (прямой OpenAI, Gemini, Claude и остальные), на карточке остаются только токены. Сумма в AED для них не подставляется.
 
 ## Installation
 

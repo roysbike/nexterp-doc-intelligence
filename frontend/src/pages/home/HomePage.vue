@@ -66,6 +66,7 @@
         <div class="di-doc-meta">
           <span v-if="doc.provider_used">via {{ doc.provider_used }}</span>
           <span v-if="doc.token_count">{{ doc.token_count }} tokens</span>
+          <span v-if="doc.cost_aed !== null && doc.cost_aed !== undefined && doc.cost_aed !== ''">{{ Number(doc.cost_aed).toFixed(4) }} AED</span>
         </div>
       </router-link>
     </div>
