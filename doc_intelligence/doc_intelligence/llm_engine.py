@@ -285,11 +285,13 @@ def llm_call(prompt, system="You are a helpful AI assistant.", max_tokens=2000, 
     frappe.throw(f"All LLM providers exhausted. Tried: {', '.join(tried)}")
 
 
-def analyse_document(raw_text, document_type, tenant_name=None, max_tokens=2000, source_format=None):
-    from doc_intelligence.doc_intelligence.prompts import get_analysis_prompt
+def analyse_document(raw_text, document_type, tenant_name=None, max_tokens=2000, source_format=None, output_language="en"):
+    from doc_intelligence.doc_intelligence.prompts import get_analysis_prompt, language_instruction
     rules = get_analysis_prompt()
     source = source_format or "unknown"
     prompt = f"""{rules}
+
+{language_instruction(output_language)}
 
 Document category: {document_type}
 Source format: {source}
@@ -320,20 +322,23 @@ Document text:
     return parsed
 
 
-def ask_question(raw_text, title, document_type, question, tenant_name=None, max_tokens=2000):
+def ask_question(raw_text, title, document_type, question, tenant_name=None, max_tokens=2000, output_language="en"):
+    from doc_intelligence.doc_intelligence.prompts import language_instruction
     prompt = f"""Document: "{title}" ({document_type})
 ---
 {raw_text[:12000]}
 ---
 Question: {question}
 
+{language_instruction(output_language)}
 Answer the question based solely on the document content. If the information is not present, say so explicitly."""
     system = "You are a precise document Q&A assistant. Only use information from the provided document."
     result = llm_call(prompt, system, max_tokens, tenant_name)
     return {"answer": result["text"], "_meta": result}
 
 
-def compare_documents(text_a, title_a, text_b, title_b, aspect=None, tenant_name=None, max_tokens=2000):
+def compare_documents(text_a, title_a, text_b, title_b, aspect=None, tenant_name=None, max_tokens=2000, output_language="en"):
+    from doc_intelligence.doc_intelligence.prompts import language_instruction
     aspect_str = f" Focus specifically on: {aspect}." if aspect else ""
     prompt = f"""Compare these two documents and return a JSON object with keys:
 - "summary": string, 2-3 sentence overall comparison
@@ -350,7 +355,8 @@ Document B: "{title_b}"
 ---
 {text_b[:6000]}
 ---
-{aspect_str}"""
+{aspect_str}
+{language_instruction(output_language)}"""
     system = "You are an expert document comparison analyst."
     result = llm_call(prompt, system, max_tokens, tenant_name, json_mode=True)
     try:

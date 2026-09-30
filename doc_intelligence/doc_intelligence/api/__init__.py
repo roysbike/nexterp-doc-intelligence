@@ -87,6 +87,13 @@ def bulk_delete_documents(doc_names):
 
 
 @frappe.whitelist()
+def set_ui_language(language):
+    language = "en" if language == "en" else "ru"
+    frappe.defaults.set_user_default("doc_intelligence_language", language)
+    return {"language": language}
+
+
+@frappe.whitelist()
 def upload_document(title, document_type, file_url):
     doc = frappe.get_doc({"doctype": "AI Document", "title": title, "document_type": document_type, "file_attachment": file_url, "status": "Pending"})
     doc.insert()
@@ -103,7 +110,8 @@ def ask_document(doc_name, question):
     settings = frappe.get_single("Doc Intelligence Settings")
     begin_usage()
     try:
-        result = ask_question(doc.raw_text, doc.title, doc.document_type, question, frappe.session.user, settings.max_tokens_per_request or 2000)
+        from doc_intelligence.doc_intelligence.prompts import output_language
+        result = ask_question(doc.raw_text, doc.title, doc.document_type, question, frappe.session.user, settings.max_tokens_per_request or 2000, output_language())
     finally:
         usage = take_usage()
     tokens = (result.get("_meta") or {}).get("tokens_out", 0)
@@ -123,7 +131,8 @@ def compare_documents(doc_name_a, doc_name_b, aspect=None):
         if d.status != "Ready":
             frappe.throw(f"Document '{d.name}' must be in Ready status.")
     settings = frappe.get_single("Doc Intelligence Settings")
-    result = engine_compare(doc_a.raw_text, doc_a.title, doc_b.raw_text, doc_b.title, aspect, frappe.session.user, settings.max_tokens_per_request or 2000)
+    from doc_intelligence.doc_intelligence.prompts import output_language
+    result = engine_compare(doc_a.raw_text, doc_a.title, doc_b.raw_text, doc_b.title, aspect, frappe.session.user, settings.max_tokens_per_request or 2000, output_language())
     return result
 
 
@@ -135,8 +144,26 @@ def get_document_stats():
     failed = frappe.db.count("AI Document", {"status": "Failed"})
     pending = frappe.db.count("AI Document", {"status": "Pending"})
     tokens = frappe.db.sql("SELECT SUM(token_count) FROM `tabAI Document`")[0][0] or 0
-    by_type = frappe.db.sql("SELECT document_type, COUNT(*) as cnt FROM `tabAI Document` GROUP BY document_type", as_dict=True)
-    return {"total": total, "ready": ready, "processing": processing, "failed": failed, "pending": pending, "total_tokens": tokens, "by_type": by_type}
+    by_type = frappe.db.sql(
+        "SELECT document_type, COUNT(*) as cnt FROM `tabAI Document` GROUP BY document_type",
+        as_dict=True,
+    )
+    recognized_by_type = frappe.db.sql(
+        "SELECT document_type, COUNT(*) as cnt FROM `tabAI Document` "
+        "WHERE status='Ready' GROUP BY document_type",
+        as_dict=True,
+    )
+    return {
+        "total": total,
+        "ready": ready,
+        "processing": processing,
+        "failed": failed,
+        "pending": pending,
+        "total_tokens": tokens,
+        "by_type": by_type,
+        "recognized": ready,
+        "recognized_by_type": recognized_by_type,
+    }
 
 
 @frappe.whitelist()

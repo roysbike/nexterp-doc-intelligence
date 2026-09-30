@@ -172,6 +172,8 @@ export const deleteDocument = (doc_name) => call(`${APP}.delete_document`, { doc
 export const bulkDeleteDocuments = (doc_names) => call(`${APP}.bulk_delete_documents`, { doc_names }).then(r => r.message)
 export const uploadDocument = (title, document_type, file_url) =>
   call(`${APP}.upload_document`, { title, document_type, file_url }).then(r => r.message)
+export const setUiLanguage = (language) =>
+  call(`${APP}.set_ui_language`, { language }).then(r => r.message)
 export const askDocument = (doc_name, question) =>
   call(`${APP}.ask_document`, { doc_name, question }).then(r => r.message)
 export const compareDocuments = (doc_name_a, doc_name_b, aspect) =>

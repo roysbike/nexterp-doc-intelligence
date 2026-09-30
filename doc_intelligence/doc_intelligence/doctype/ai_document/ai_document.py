@@ -119,19 +119,23 @@ def process_document(doc_name):
         token_limit = int(settings.max_tokens_per_request or 4000)
         if token_limit < 4000:
             token_limit = 4000
+        from doc_intelligence.doc_intelligence.prompts import output_language
+        language = output_language(doc.owner)
         result = analyse_document(
             raw_text,
             doc.document_type or "Document",
             None,
             token_limit,
             source_format=source_format,
+            output_language=language,
         )
 
         doc.summary = _as_text(result.get("summary", ""))
         entities = _as_text(result.get("entities", ""))
         accounting = result.get("accounting")
         if accounting:
-            doc.key_entities = "Проверка полей счёта:\n" + _as_text(accounting) + ("\n\n" + entities if entities else "")
+            heading = "Invoice field check" if language == "en" else "Проверка полей счёта"
+            doc.key_entities = heading + ":\n" + _as_text(accounting) + ("\n\n" + entities if entities else "")
         else:
             doc.key_entities = entities
         tables = result.get("tables", [])

@@ -5,21 +5,42 @@ replace it in Doc Intelligence Settings; an empty value keeps this default.
 This is an extraction checklist, not a filing instruction and not legal advice.
 """
 
-DEFAULT_ANALYSIS_PROMPT = """Ты разбираешь первичный документ для бухгалтерского учёта в ОАЭ. Это извлечение данных, не юридическая консультация и не сдача отчётности в FTA или EmaraTax.
+DEFAULT_ANALYSIS_PROMPT = """Extract a source document for UAE bookkeeping. This is data extraction, not legal advice and not an FTA or EmaraTax filing.
 
-Правила:
-- Бери только то, что напечатано в документе. Не выдумывай TRN, сумму, ставку НДС, дату, номер, адрес и валюту.
-- Если поля нет на документе, оставь его пустым и перечисли имя поля в missing_mandatory или warnings.
-- Налоговый счёт (tax invoice) при ставке 5% сверяй по наличию: слова Tax Invoice, имя и адрес поставщика, TRN поставщика, имя покупателя и его TRN если он плательщик НДС, номер счёта, дата выставления, описание, количество, цена, сумма, ставка НДС, сумма НДС, итог к оплате.
-- Валюта — как напечатана. Не пересчитывай в AED, если документ в другой валюте.
-- Ставку 5% ставь только если она напечатана или прямо указана в колонке VAT. Иначе не подставляй её.
-- Сверь строки, сумму НДС и итог. Расхождение запиши в warnings и не подгоняй числа.
-- PDF, JPG и скан — не электронный инвойс PINT-AE и не подтверждение, что документ сдан в FTA.
-- Документ остаётся источником для черновика. Не пиши, что он проведён или отправлен в налоговую.
-- Даты копируй как в документе. Не подставляй текущий год, если год не напечатан.
-- Пустые строки бланка, заголовки колонок и отменённые строки в таблицу не включай.
-- summary, entities и тексты warnings пиши по-русски. Ключи JSON не переводи.
+Rules:
+- Use only text printed on the document. Do not invent TRN, amount, VAT rate, date, number, address, or currency.
+- If a field is missing, leave it empty and name it in missing_mandatory or warnings.
+- For a 5% tax invoice, check: Tax Invoice, supplier name and address, supplier TRN, buyer name, buyer TRN if VAT-registered, invoice number, issue date, description, quantity, price, amount, VAT rate, VAT amount, amount due.
+- Keep the printed currency. Do not convert it.
+- Use 5% only when that rate is printed or shown in a VAT column.
+- Check lines, VAT, and the total. Put a mismatch in warnings. Do not change the figures.
+- A PDF, JPG, or scan is not a PINT-AE e-invoice and not proof of filing.
+- The file is a source for a draft. Do not say it was submitted or filed.
+- Copy dates as printed. Do not insert the current year.
+- Skip blank template rows, column headers, and cancelled lines.
 """
+
+
+def output_language(user=None):
+    """Language chosen in the plugin. Missing choice stays English."""
+    try:
+        import frappe
+        value = frappe.defaults.get_user_default("doc_intelligence_language", user or frappe.session.user)
+    except Exception:
+        value = None
+    return "ru" if value == "ru" else "en"
+
+
+def language_instruction(language):
+    if language == "en":
+        return (
+            "Write summary, entities, answers, and warning texts in English. "
+            "Do not translate JSON keys. This line overrides any earlier language instruction."
+        )
+    return (
+        "summary, entities, ответы и тексты warnings пиши по-русски. "
+        "Ключи JSON не переводи. Эта строка важнее более ранних указаний о языке."
+    )
 
 
 def get_analysis_prompt():

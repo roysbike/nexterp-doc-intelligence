@@ -1,25 +1,25 @@
 <template>
   <div class="di-modal-backdrop" @click.self="close">
     <div class="di-modal di-card di-modal-wide">
-      <h2>Create ERPNext Record</h2>
+      <h2>{{ t('create.title') }}</h2>
       <div v-if="error" class="di-error">{{ error }}</div>
 
       <!-- Step 1: choose target -->
       <template v-if="step === 1">
-        <label class="di-label">What do you want to create from this document?</label>
+        <label class="di-label">{{ t('create.prompt') }}</label>
         <select v-model="target" class="di-select">
-          <optgroup label="Entities">
-            <option v-for="t in entityTypes" :key="t" :value="t">{{ t }}</option>
+          <optgroup :label="t('create.entities')">
+            <option v-for="kind in entityTypes" :key="kind" :value="kind">{{ targetLabel(kind) }}</option>
           </optgroup>
-          <optgroup label="Transactions">
-            <option value="Purchase Invoice">Purchase Invoice</option>
-            <option v-for="t in txnTypes" :key="t" :value="t">{{ t }}</option>
+          <optgroup :label="t('create.transactions')">
+            <option value="Purchase Invoice">{{ targetLabel('Purchase Invoice') }}</option>
+            <option v-for="kind in txnTypes" :key="kind" :value="kind">{{ targetLabel(kind) }}</option>
           </optgroup>
         </select>
         <div class="di-modal-actions">
-          <button class="di-btn secondary" @click="close">Cancel</button>
+          <button class="di-btn secondary" @click="close">{{ t('create.cancel') }}</button>
           <button class="di-btn primary" :disabled="extracting" @click="extract">
-            {{ extracting ? 'Asking AI…' : 'Extract with AI' }}
+            {{ extracting ? t('create.extracting') : t('create.extract') }}
           </button>
         </div>
       </template>
@@ -220,12 +220,17 @@ import { ref, computed } from 'vue'
 import * as api from '@/api/frappe'
 import { getList } from '@/api/frappe'
 import LinkField from '@/components/LinkField.vue'
+import { t } from '@/i18n'
 
 const props = defineProps({ docName: { type: String, required: true } })
 const emit = defineEmits(['close', 'created'])
 
 const entityTypes = ['Item', 'Supplier', 'Customer', 'Employee', 'Address', 'Contact', 'Warehouse']
 const txnTypes = ['Quotation', 'Sales Order', 'Purchase Order', 'Material Request']
+
+function targetLabel(name) {
+  return `${name} (${t('target.' + name)})`
+}
 
 const LINK_FIELD_MAP = {
   Item: { item_group: 'Item Group', stock_uom: 'UOM', brand: 'Brand', hsn_code: 'GST HSN Code' },
