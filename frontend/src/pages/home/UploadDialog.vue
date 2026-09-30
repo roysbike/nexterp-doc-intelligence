@@ -12,16 +12,18 @@
 
         <label class="di-label" style="margin-top:12px">{{ t('upload.type') }}</label>
         <select v-model="documentType" class="di-select">
-          <option v-for="kind in types" :key="kind" :value="kind">{{ t('type.' + kind) }}</option>
+          <option v-for="kind in types" :key="kind" :value="kind">{{ typeOption(kind) }}</option>
         </select>
+        <p class="di-hint">{{ t('upload.hint') }}</p>
       </template>
 
       <!-- Batch mode: type applies to all files, each keeps its own filename as title -->
       <template v-else>
         <label class="di-label">{{ t('upload.typeBatch', { n: batchFiles.length }) }}</label>
         <select v-model="documentType" class="di-select">
-          <option v-for="kind in types" :key="kind" :value="kind">{{ t('type.' + kind) }}</option>
+          <option v-for="kind in types" :key="kind" :value="kind">{{ typeOption(kind) }}</option>
         </select>
+        <p class="di-hint">{{ t('upload.hint') }}</p>
       </template>
 
       <label class="di-label" style="margin-top:12px">{{ t('upload.file') }}</label>
@@ -108,6 +110,10 @@ const emit = defineEmits(['close', 'uploaded'])
 const store = useDocumentsStore()
 
 const types = ['Entities', 'Transactions']
+
+function typeOption(kind) {
+  return `${t('type.' + kind)} (${t('upload.note.' + kind)})`
+}
 
 const title = ref('')
 const documentType = ref('Entities')
