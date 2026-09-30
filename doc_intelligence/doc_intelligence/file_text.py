@@ -1,9 +1,10 @@
 """Read uploaded files into plain text.
 
 The file kind comes from the extension and, when they disagree, from the
-file header. A PDF with a text layer is read locally. A scanned PDF and any
-picture are sent to the vision callback. Legacy .doc is rejected with a
-clear message instead of being treated as empty text.
+file header. A PDF with a real text layer is read locally. A PDF that only
+wraps a scan is treated as that scan: the embedded photo is sent to the
+vision callback at its own size, not redrawn as a small page image. Legacy
+.doc is rejected with a clear message instead of being treated as empty text.
 """
 
 import os
@@ -29,6 +30,11 @@ _EXT_KIND = {
 IMAGE_KINDS = {"jpeg", "png", "webp", "gif", "tiff", "bmp"}
 _DIRECT_IMAGE_KINDS = {"jpeg", "png", "webp", "gif"}
 _MIN_TEXT_CHARS = 40
+# A wrapped scan sometimes carries a short fake text layer (a title, a page
+# number). A real invoice text layer is much longer than this.
+_MIN_REAL_PDF_CHARS = 400
+_SCAN_PAGE_COVER = 0.5
+_FALLBACK_DPI = 200
 _DEFAULT_PDF_PAGES = 8
 
 
@@ -52,7 +58,7 @@ def extract_file_text(file_path, ocr_image, max_pdf_pages=_DEFAULT_PDF_PAGES):
     kind = detect_kind(file_path)
     if kind == "pdf":
         text = _pdf_text_layer(file_path)
-        if _usable(text):
+        if _pdf_text_is_real(file_path, text):
             return text, "pdf-text"
         scanned = _ocr_pdf(file_path, ocr_image, max_pdf_pages)
         if not _usable(scanned):
@@ -192,6 +198,37 @@ def _import_pymupdf():
     return pymupdf
 
 
+def _pdf_text_is_real(file_path, text):
+    """A short text layer on top of a full-page photo is not the invoice."""
+    compact = len("".join((text or "").split()))
+    if compact < _MIN_TEXT_CHARS:
+        return False
+    if compact >= _MIN_REAL_PDF_CHARS:
+        return True
+    return not _pdf_is_wrapped_scan(file_path)
+
+
+def _pdf_is_wrapped_scan(file_path):
+    try:
+        pymupdf = _import_pymupdf()
+    except ValueError:
+        return False
+    document = pymupdf.open(file_path)
+    try:
+        if document.page_count < 1:
+            return False
+        limit = min(document.page_count, _DEFAULT_PDF_PAGES)
+        wrapped = 0
+        for index in range(limit):
+            if _dominant_scan_xref(document[index]):
+                wrapped += 1
+        return wrapped > 0 and wrapped == limit
+    except Exception:
+        return False
+    finally:
+        document.close()
+
+
 def _ocr_pdf(file_path, ocr_image, max_pages):
     pymupdf = _import_pymupdf()
     document = pymupdf.open(file_path)
@@ -200,12 +237,13 @@ def _ocr_pdf(file_path, ocr_image, max_pages):
         total = document.page_count
         limit = min(total, max_pages)
         for index in range(limit):
-            jpeg_path = _pixmap_to_jpeg(document[index])
+            page = document[index]
+            image_path = _scan_image_file(document, page)
             try:
-                text = (ocr_image(jpeg_path) or "").strip()
+                text = (ocr_image(image_path) or "").strip()
             finally:
-                if os.path.exists(jpeg_path):
-                    os.remove(jpeg_path)
+                if os.path.exists(image_path):
+                    os.remove(image_path)
             if text:
                 parts.append(f"--- page {index + 1} ---\n{text}")
         if total > limit:
@@ -213,6 +251,86 @@ def _ocr_pdf(file_path, ocr_image, max_pages):
     finally:
         document.close()
     return "\n\n".join(parts)
+
+
+def _scan_image_file(document, page):
+    """Prefer the photo stored inside the page. Redraw only when it is missing."""
+    xref = _dominant_scan_xref(page)
+    if xref:
+        extracted = _write_embedded_image(document, xref)
+        if extracted:
+            return extracted
+    return _pixmap_to_jpeg(page, dpi=_FALLBACK_DPI)
+
+
+def _dominant_scan_xref(page):
+    """Xref of the picture that fills the page, or None for a normal text page."""
+    page_area = abs(page.rect.width * page.rect.height) or 1
+    best_pixels = 0
+    best_xref = None
+    infos = []
+    try:
+        infos = page.get_image_info(xrefs=True) or []
+    except Exception:
+        infos = []
+    for info in infos:
+        xref = info.get("xref") or 0
+        if xref <= 0:
+            continue
+        bbox = info.get("bbox")
+        cover = _box_area(bbox) / page_area
+        if cover < _SCAN_PAGE_COVER:
+            continue
+        pixels = int(info.get("width") or 0) * int(info.get("height") or 0)
+        if pixels >= best_pixels:
+            best_pixels = pixels
+            best_xref = xref
+    if best_xref:
+        return best_xref
+    try:
+        images = page.get_images(full=True) or []
+    except Exception:
+        return None
+    for item in images:
+        xref = item[0]
+        width = item[2] or 0
+        height = item[3] or 0
+        pixels = width * height
+        if min(width, height) >= 800 and pixels > best_pixels:
+            best_pixels = pixels
+            best_xref = xref
+    return best_xref
+
+
+def _box_area(bbox):
+    if bbox is None:
+        return 0
+    if hasattr(bbox, "width"):
+        return abs(bbox.width * bbox.height)
+    try:
+        return abs((bbox[2] - bbox[0]) * (bbox[3] - bbox[1]))
+    except (TypeError, IndexError):
+        return 0
+
+
+def _write_embedded_image(document, xref):
+    try:
+        extracted = document.extract_image(xref)
+    except Exception:
+        return None
+    if not extracted or not extracted.get("image"):
+        return None
+    ext = (extracted.get("ext") or "").lower()
+    if ext == "jpeg":
+        ext = "jpg"
+    if ext not in {"jpg", "png", "webp", "gif"}:
+        return None
+    handle = tempfile.NamedTemporaryFile(suffix="." + ext, delete=False)
+    try:
+        handle.write(extracted["image"])
+    finally:
+        handle.close()
+    return handle.name
 
 
 def _render_jpeg(file_path):
@@ -226,8 +344,8 @@ def _render_jpeg(file_path):
         document.close()
 
 
-def _pixmap_to_jpeg(page):
-    pixmap = page.get_pixmap(dpi=144)
+def _pixmap_to_jpeg(page, dpi=_FALLBACK_DPI):
+    pixmap = page.get_pixmap(dpi=dpi)
     handle = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
     handle.close()
     pixmap.save(handle.name)

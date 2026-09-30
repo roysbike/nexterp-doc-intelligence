@@ -1,6 +1,6 @@
 <template>
   <div class="di-modal-backdrop" @click.self="close">
-    <div class="di-modal di-card di-modal-wide">
+    <div class="di-modal di-card di-modal-wide di-modal-sheet">
       <h2>{{ t('create.title') }}</h2>
       <div v-if="error" class="di-error">{{ error }}</div>
 
@@ -155,7 +155,7 @@
                 @update:modelValue="() => { header.matched_party = null }"
               />
             </div>
-            <div>
+            <div class="di-company-field">
               <label class="di-label">Company</label>
               <select v-model="header.company" class="di-select">
                 <option v-for="c in companies" :key="c.name" :value="c.name">{{ c.name }}</option>
@@ -171,25 +171,31 @@
               <input v-if="mode === 'pi'" v-model="header.bill_date" type="date" class="di-input" />
               <input v-else v-model="header.valid_till" type="date" class="di-input" />
             </div>
-            <div>
-              <label class="di-label">Currency</label>
-              <input v-model="header.currency" class="di-input" />
+            <div class="di-currency-field">
+              <label class="di-label">{{ t('currency.label') }}</label>
+              <select v-model="header.currency" class="di-select">
+                <option v-if="!header.currency" value="">{{ t('currency.pick') }}</option>
+                <option v-for="c in currencies" :key="c.name" :value="c.name">{{ c.name }}</option>
+              </select>
+              <p class="di-hint">{{ printedCurrency ? t('currency.printed', { code: printedCurrency }) : t('currency.fallback') }}</p>
             </div>
           </div>
 
-          <label class="di-label" style="margin-top:14px">Line items</label>
-          <table class="di-item-table">
-            <thead><tr><th>Item</th><th>Qty</th><th>Rate</th><th>UOM</th><th></th></tr></thead>
-            <tbody>
-              <tr v-for="(it, i) in items" :key="i">
-                <td><input v-model="it.item_name" class="di-input" /></td>
-                <td><input v-model.number="it.qty" type="number" class="di-input" /></td>
-                <td><input v-model.number="it.rate" type="number" class="di-input" /></td>
-                <td><input v-model="it.uom" class="di-input" /></td>
-                <td><button class="di-btn secondary" @click="items.splice(i,1)">✕</button></td>
-              </tr>
-            </tbody>
-          </table>
+          <label class="di-label" style="margin-top:14px">Line items ({{ items.length }})</label>
+          <div class="di-items-scroll">
+            <table class="di-item-table">
+              <thead><tr><th>Item</th><th>Qty</th><th>Rate</th><th>UOM</th><th></th></tr></thead>
+              <tbody>
+                <tr v-for="(it, i) in items" :key="i">
+                  <td><input v-model="it.item_name" class="di-input" /></td>
+                  <td><input v-model.number="it.qty" type="number" class="di-input" /></td>
+                  <td><input v-model.number="it.rate" type="number" class="di-input" /></td>
+                  <td><input v-model="it.uom" class="di-input" /></td>
+                  <td><button class="di-btn secondary" @click="items.splice(i,1)">✕</button></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
           <button class="di-btn secondary" style="margin-top:8px" @click="items.push({ item_name:'', qty:1, rate:0, uom:'Nos' })">+ Add line</button>
         </template>
 
@@ -216,7 +222,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import * as api from '@/api/frappe'
 import { getList } from '@/api/frappe'
 import LinkField from '@/components/LinkField.vue'
@@ -267,6 +273,8 @@ const fields = ref({})
 const header = ref({})
 const items = ref([])
 const companies = ref([])
+const currencies = ref([])
+const printedCurrency = ref('')
 const created = ref(null)
 
 const piValidation = ref(null)
@@ -286,6 +294,12 @@ const partyMultipleMatches = ref(false)
 
 function close() { emit('close') }
 
+watch(() => header.value.company, (company) => {
+  if (printedCurrency.value || !company) return
+  const next = companyCurrency(company)
+  if (next) header.value.currency = next
+})
+
 function prettyLabel(key) {
   return key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
@@ -293,8 +307,31 @@ function prettyLabel(key) {
 async function loadCompanies() {
   if (companies.value.length) return
   try {
-    companies.value = await getList('Company', { fields: ['name'], limit: 50 })
+    companies.value = await getList('Company', { fields: ['name', 'default_currency'], limit: 50 })
   } catch { /* non-fatal — company select will just be empty */ }
+}
+
+async function loadCurrencies() {
+  if (currencies.value.length) return
+  try {
+    currencies.value = await getList('Currency', { fields: ['name'], limit: 300, orderBy: 'name asc' })
+  } catch {
+    currencies.value = []
+  }
+}
+
+function companyCurrency(companyName) {
+  return companies.value.find(c => c.name === companyName)?.default_currency || ''
+}
+
+function resolveCurrency(printed) {
+  const code = String(printed || '').trim().toUpperCase()
+  printedCurrency.value = code
+  const selected = code || companyCurrency(header.value.company)
+  if (selected && !currencies.value.some(c => c.name === selected)) {
+    currencies.value = [{ name: selected }, ...currencies.value]
+  }
+  return selected
 }
 
 async function extract() {
@@ -304,7 +341,7 @@ async function extract() {
   try {
     if (target.value === 'Purchase Invoice') {
       mode.value = 'pi'
-      await loadCompanies()
+      await Promise.all([loadCompanies(), loadCurrencies()])
       const res = await api.createPurchaseInvoice(props.docName)
       header.value = {
         supplier_name: res.supplier_name,
@@ -313,10 +350,11 @@ async function extract() {
         bill_date: res.extracted?.bill_date,
         posting_date: res.extracted?.posting_date,
         due_date: res.extracted?.due_date,
-        currency: res.extracted?.currency || 'INR',
+        currency: '',
         remarks: res.extracted?.remarks,
         company: companies.value[0]?.name || ''
       }
+      header.value.currency = resolveCurrency(res.extracted?.currency)
       items.value = res.items || []
       piValidation.value = res.validation || null
       piDuplicate.value = res.duplicate_of || null
@@ -333,7 +371,7 @@ async function extract() {
       entityMultipleMatches.value = !!res.match_multiple
     } else {
       mode.value = 'txn'
-      await loadCompanies()
+      await Promise.all([loadCompanies(), loadCurrencies()])
       const res = await api.extractTransaction(props.docName, target.value)
       header.value = {
         party_type: res.party_type,
@@ -341,10 +379,11 @@ async function extract() {
         matched_party: res.matched_party,
         transaction_date: res.extracted?.transaction_date,
         valid_till: res.extracted?.valid_till,
-        currency: res.extracted?.currency || 'INR',
+        currency: '',
         remarks: res.extracted?.remarks,
         company: companies.value[0]?.name || ''
       }
+      header.value.currency = resolveCurrency(res.extracted?.currency)
       items.value = res.items || []
       txnValidation.value = res.validation || null
       txnDuplicate.value = res.duplicate_of || null
@@ -411,11 +450,15 @@ async function createRecord() {
 <style scoped>
 .di-modal-backdrop {
   position: fixed; inset: 0; background: rgba(15,23,42,.5);
-  display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px; overflow-y: auto;
+  display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px;
 }
-.di-modal-wide { width: 100%; max-width: 640px; }
-.di-modal h2 { margin: 0 0 14px; font-size: 17px; color: var(--di-navy); }
-.di-modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+.di-modal-wide { width: 100%; max-width: 920px; }
+.di-modal-sheet {
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+}
+.di-modal h2 { margin: 0 0 14px; font-size: 17px; color: var(--di-navy); flex: 0 0 auto; }
+.di-modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 12px; flex: 0 0 auto; }
 .di-notice {
   background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af;
   border-radius: 8px; padding: 8px 12px; font-size: 13px; margin-bottom: 14px;
@@ -432,10 +475,28 @@ async function createRecord() {
 .di-risk-detail { margin-top: 4px; font-weight: 400; }
 .di-checkbox-row { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
 .di-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.di-hint { font-size: 12px; color: var(--di-muted); margin-top: 10px; }
-.di-item-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-.di-item-table th { text-align: left; font-size: 11px; color: var(--di-muted); padding: 4px 6px; }
+.di-form-grid > * { min-width: 0; }
+.di-company-field, .di-currency-field { grid-column: 1 / -1; }
+.di-company-field .di-select, .di-currency-field .di-select { width: 100%; }
+.di-hint { font-size: 12px; color: var(--di-muted); margin-top: 8px; }
+.di-items-scroll {
+  min-height: 140px;
+  max-height: 38vh;
+  overflow: auto;
+  border: 1px solid var(--di-border, #e5e7eb);
+  border-radius: 8px;
+  margin-top: 8px;
+}
+.di-item-table { width: 100%; border-collapse: collapse; margin-top: 0; }
+.di-item-table th {
+  text-align: left; font-size: 11px; color: var(--di-muted); padding: 6px;
+  position: sticky; top: 0; background: #fff; z-index: 1;
+}
 .di-item-table td { padding: 4px 6px; }
+.di-item-table th:nth-child(1), .di-item-table td:nth-child(1) { width: 46%; }
+.di-item-table th:nth-child(2), .di-item-table td:nth-child(2),
+.di-item-table th:nth-child(3), .di-item-table td:nth-child(3) { width: 14%; }
+.di-item-table th:nth-child(4), .di-item-table td:nth-child(4) { width: 16%; }
 .di-success { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 24px 0; text-align: center; }
 .di-success-icon {
   width: 40px; height: 40px; border-radius: 50%; background: #dcfce7; color: #166534;

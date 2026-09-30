@@ -130,9 +130,16 @@ def process_document(doc_name):
             output_language=language,
         )
 
-        doc.summary = _as_text(result.get("summary", ""))
+        from doc_intelligence.doc_intelligence.accountant_summary import (
+            accountant_summary,
+            replace_arithmetic_warnings,
+        )
+        model_summary = _as_text(result.get("summary", ""))
         entities = _as_text(result.get("entities", ""))
         accounting = result.get("accounting")
+        if isinstance(accounting, dict):
+            accounting = replace_arithmetic_warnings(accounting, language)
+        doc.summary = accountant_summary(accounting, language, model_summary) or model_summary
         if accounting:
             heading = "Invoice field check" if language == "en" else "Проверка полей счёта"
             doc.key_entities = heading + ":\n" + _as_text(accounting) + ("\n\n" + entities if entities else "")

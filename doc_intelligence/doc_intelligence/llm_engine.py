@@ -297,7 +297,7 @@ Document category: {document_type}
 Source format: {source}
 
 Return a JSON object with these exact keys:
-- "summary": string, 3-5 sentences in Russian: what the document is, who the parties are, and whether the mandatory tax-invoice fields are present
+- "summary": string, 2 sentences: what the document is and who the parties are. Do not include arithmetic or a rounding error
 - "entities": string, bullet list of names, TRNs, dates, amounts, and currency actually printed
 - "tables": array of objects, each with "headers" (array of strings) and "rows" (array of arrays). Empty array if no tables found. Include only real charged lines.
 - "accounting": object with these keys, using null when the value is not printed:

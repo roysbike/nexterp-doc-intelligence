@@ -831,7 +831,7 @@ Return ONLY a valid JSON object with these exact keys (use null when a value is 
   {party_line}
   "transaction_date": "document date in YYYY-MM-DD, else null",
   "valid_till": "validity / delivery / required-by date in YYYY-MM-DD, else null",
-  "currency": "currency code like INR/USD, default INR",
+  "currency": "currency code printed on the document, null if it is not printed",
   "items": [
     {{
       "item_name": "name/description of the item or service",
@@ -996,7 +996,7 @@ def create_transaction_doc(txn_type, header, items, confirm_duplicate=0):
     base = {
         "doctype": txn_type,
         "company": company,
-        "currency": header.get("currency") or "INR",
+        "currency": header.get("currency") or frappe.db.get_value("Company", company, "default_currency"),
         "items": resolved,
     }
 

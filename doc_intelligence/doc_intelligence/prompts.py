@@ -13,7 +13,7 @@ Rules:
 - For a 5% tax invoice, check: Tax Invoice, supplier name and address, supplier TRN, buyer name, buyer TRN if VAT-registered, invoice number, issue date, description, quantity, price, amount, VAT rate, VAT amount, amount due.
 - Keep the printed currency. Do not convert it.
 - Use 5% only when that rate is printed or shown in a VAT column.
-- Check lines, VAT, and the total. Put a mismatch in warnings. Do not change the figures.
+- Copy the printed net, VAT, and total into the accounting fields. Do not write a rounding-error sentence and do not call a gap 0.04 unless you also show the subtraction. The application adds the amount check.
 - A PDF, JPG, or scan is not a PINT-AE e-invoice and not proof of filing.
 - The file is a source for a draft. Do not say it was submitted or filed.
 - Copy dates as printed. Do not insert the current year.
