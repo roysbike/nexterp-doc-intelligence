@@ -1,29 +1,30 @@
 <template>
   <div>
-    <h1>Dashboard</h1>
+    <h1>{{ t('dash.title') }}</h1>
 
-    <div v-if="loading" class="di-empty">Loading…</div>
+    <div v-if="loading" class="di-empty">{{ t('dash.loading') }}</div>
 
     <template v-else>
       <div class="di-kpi-row">
-        <div class="di-card di-kpi"><div class="di-kpi-num">{{ stats.total }}</div><div class="di-kpi-label">Total</div></div>
-        <div class="di-kpi-row-item di-card di-kpi"><div class="di-kpi-num">{{ stats.ready }}</div><div class="di-kpi-label">Ready</div></div>
-        <div class="di-card di-kpi"><div class="di-kpi-num">{{ stats.processing }}</div><div class="di-kpi-label">Processing</div></div>
-        <div class="di-card di-kpi"><div class="di-kpi-num">{{ stats.pending }}</div><div class="di-kpi-label">Pending</div></div>
-        <div class="di-card di-kpi"><div class="di-kpi-num">{{ stats.failed }}</div><div class="di-kpi-label">Failed</div></div>
+        <div class="di-card di-kpi"><div class="di-kpi-num">{{ stats.total }}</div><div class="di-kpi-label">{{ t('dash.total') }}</div></div>
+        <div class="di-kpi-row-item di-card di-kpi"><div class="di-kpi-num">{{ stats.recognized }}</div><div class="di-kpi-label">{{ t('dash.recognized') }}</div></div>
+        <div class="di-card di-kpi"><div class="di-kpi-num">{{ stats.processing }}</div><div class="di-kpi-label">{{ t('dash.processing') }}</div></div>
+        <div class="di-card di-kpi"><div class="di-kpi-num">{{ stats.pending }}</div><div class="di-kpi-label">{{ t('dash.pending') }}</div></div>
+        <div class="di-card di-kpi"><div class="di-kpi-num">{{ stats.failed }}</div><div class="di-kpi-label">{{ t('dash.failed') }}</div></div>
       </div>
 
       <div class="di-card">
-        <h3>Documents by Type</h3>
-        <div v-for="row in stats.by_type" :key="row.document_type" class="di-bar-row">
-          <span class="di-bar-label">{{ row.document_type }}</span>
+        <h3>{{ t('dash.byType') }}</h3>
+        <div v-if="!recognizedRows.length" class="di-empty" style="padding:12px 0">{{ t('dash.none') }}</div>
+        <div v-for="row in recognizedRows" :key="row.document_type" class="di-bar-row">
+          <span class="di-bar-label">{{ typeLabel(row.document_type) }}</span>
           <div class="di-bar-track"><div class="di-bar-fill" :style="{ width: pct(row.cnt, maxByType) + '%' }" /></div>
           <span class="di-bar-val">{{ row.cnt }}</span>
         </div>
       </div>
 
       <div class="di-card">
-        <h3>Provider Health (24h)</h3>
+        <h3>{{ t('dash.health') }}</h3>
         <div class="di-health-grid">
           <div v-for="p in health" :key="p.provider" class="di-health-card">
             <div class="di-health-top">
@@ -32,9 +33,9 @@
                 {{ p.success_rate != null ? p.success_rate + '%' : 'no data' }}
               </span>
             </div>
-            <div class="di-stat">{{ p.total || 0 }} calls · {{ p.total_tokens || 0 }} tokens</div>
+            <div class="di-stat">{{ p.total || 0 }} {{ t('dash.calls') }} · {{ p.total_tokens || 0 }} {{ t('home.tokens') }}</div>
           </div>
-          <div v-if="!health.length" class="di-empty" style="padding:12px 0">No provider activity yet.</div>
+          <div v-if="!health.length" class="di-empty" style="padding:12px 0">{{ t('dash.noHealth') }}</div>
         </div>
       </div>
     </template>
@@ -44,12 +45,20 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import * as api from '@/api/frappe'
+import { t } from '@/i18n'
 
-const stats = ref({ total: 0, ready: 0, processing: 0, pending: 0, failed: 0, by_type: [] })
+const stats = ref({ total: 0, ready: 0, recognized: 0, processing: 0, pending: 0, failed: 0, by_type: [], recognized_by_type: [] })
 const health = ref([])
 const loading = ref(true)
 
-const maxByType = computed(() => Math.max(1, ...stats.value.by_type.map(r => r.cnt)))
+const recognizedRows = computed(() => stats.value.recognized_by_type || [])
+const maxByType = computed(() => Math.max(1, ...recognizedRows.value.map(r => r.cnt)))
+
+function typeLabel(name) {
+  const key = 'type.' + name
+  const label = t(key)
+  return label === key ? (name || '—') : label
+}
 function pct(n, max) { return Math.round((n / max) * 100) }
 
 onMounted(async () => {

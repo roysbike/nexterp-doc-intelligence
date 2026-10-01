@@ -110,24 +110,115 @@ def _log_provider_call(provider_id, success, tokens, error=None):
         pass
 
 
+# UAE dirham is pegged at 3.6725 per US dollar. OpenRouter reports usage.cost in USD.
+AED_PER_USD = 3.6725
+
+
+def begin_usage():
+    """Start summing tokens and provider cost for the current job."""
+    frappe.local.di_usage = {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "priced": False}
+
+
+def take_usage():
+    """Return the summed usage and stop recording."""
+    bucket = getattr(frappe.local, "di_usage", None)
+    frappe.local.di_usage = None
+    if not isinstance(bucket, dict):
+        return {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "priced": False}
+    return bucket
+
+
+def aed_per_usd():
+    """Dirhams per dollar from settings, or the official peg when unset."""
+    try:
+        rate = float(_get_settings().get("aed_per_usd") or 0)
+    except Exception:
+        rate = 0
+    return rate if rate > 0 else AED_PER_USD
+
+
+def _note_usage(result):
+    bucket = getattr(frappe.local, "di_usage", None)
+    if not isinstance(bucket, dict) or not isinstance(result, dict):
+        return
+    bucket["tokens_in"] += int(result.get("tokens_in") or 0)
+    bucket["tokens_out"] += int(result.get("tokens_out") or 0)
+    if result.get("cost_usd") is not None:
+        bucket["cost_usd"] += float(result["cost_usd"])
+        bucket["priced"] = True
+
+
+def _raw_response_json(raw):
+    response = getattr(raw, "http_response", None)
+    text = getattr(response, "text", None) if response is not None else None
+    if text is None and response is not None:
+        content = getattr(response, "content", b"") or b""
+        if isinstance(content, bytes):
+            text = content.decode("utf-8", errors="replace")
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except Exception:
+        return None
+
+
+def _chat_create(client, provider, **kwargs):
+    """Return (parsed response, raw JSON). OpenRouter's USD cost is only in the raw body."""
+    if provider["id"] != "openrouter":
+        return client.chat.completions.create(**kwargs), None
+    raw = client.chat.completions.with_raw_response.create(**kwargs)
+    return raw.parse(), _raw_response_json(raw)
+
+
+def _usage_from(resp, body):
+    usage = getattr(resp, "usage", None)
+    raw_usage = {}
+    if isinstance(body, dict) and isinstance(body.get("usage"), dict):
+        raw_usage = body["usage"]
+    tokens_in = int(getattr(usage, "prompt_tokens", 0) or raw_usage.get("prompt_tokens") or 0)
+    tokens_out = int(getattr(usage, "completion_tokens", 0) or raw_usage.get("completion_tokens") or 0)
+    cost = raw_usage.get("cost")
+    if cost is None and usage is not None:
+        cost = getattr(usage, "cost", None)
+        extra = getattr(usage, "model_extra", None) or {}
+        if cost is None and isinstance(extra, dict):
+            cost = extra.get("cost")
+    cost_usd = None
+    if cost is not None:
+        try:
+            cost_usd = float(cost)
+        except (TypeError, ValueError):
+            cost_usd = None
+    return tokens_in, tokens_out, cost_usd
+
+
+def _completion_token_limit(provider, model, max_tokens):
+    """gpt-5 and o-series reject max_tokens and return an empty completion."""
+    if provider["id"] == "openai" and str(model or "").lower().startswith(("gpt-5", "o1", "o3", "o4")):
+        return {"max_completion_tokens": max_tokens}
+    return {"max_tokens": max_tokens}
+
+
 def _call_openai_compat(provider, prompt, system, max_tokens, settings):
     from openai import OpenAI, RateLimitError, APIStatusError
     key = provider.get("_override_key") or provider.get("_key") or settings.get_password(provider["key_field"])
     model = getattr(settings, provider["model_field"], None) or provider["default_model"]
     extra_headers = {}
     if provider["id"] == "openrouter":
-        extra_headers = {"HTTP-Referer": "https://github.com/aravindsprint/doc_intelligence", "X-Title": "Doc Intelligence"}
+        extra_headers = {"HTTP-Referer": "https://github.com/roysbike/nexterp-doc-intelligence", "X-Title": "Doc Intelligence"}
     try:
         client = OpenAI(api_key=key, base_url=provider["base_url"], default_headers=extra_headers, timeout=90.0, max_retries=1)
-        resp = client.chat.completions.create(
+        resp, body = _chat_create(
+            client, provider,
             model=model,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
+            **_completion_token_limit(provider, model, max_tokens),
         )
         text = resp.choices[0].message.content
-        tokens_in = getattr(resp.usage, "prompt_tokens", 0)
-        tokens_out = getattr(resp.usage, "completion_tokens", 0)
-        return {"text": text, "provider": provider["id"], "model": model, "tokens_in": tokens_in, "tokens_out": tokens_out}
+        tokens_in, tokens_out, cost_usd = _usage_from(resp, body)
+        return {"text": text, "provider": provider["id"], "model": model,
+                "tokens_in": tokens_in, "tokens_out": tokens_out, "cost_usd": cost_usd}
     except RateLimitError as e:
         raise _RateLimitError(str(e))
     except APIStatusError as e:
@@ -153,7 +244,8 @@ def _call_claude(provider, prompt, system, max_tokens, settings):
         text = resp.content[0].text
         tokens_in = resp.usage.input_tokens
         tokens_out = resp.usage.output_tokens
-        return {"text": text, "provider": "claude", "model": model, "tokens_in": tokens_in, "tokens_out": tokens_out}
+        return {"text": text, "provider": "claude", "model": model,
+                "tokens_in": tokens_in, "tokens_out": tokens_out, "cost_usd": None}
     except anthropic.RateLimitError as e:
         raise _RateLimitError(str(e))
     except Exception as e:
@@ -178,6 +270,7 @@ def llm_call(prompt, system="You are a helpful AI assistant.", max_tokens=2000, 
             _log_provider_call(p["id"], True, result.get("tokens_out", 0))
             result["fallback_used"] = i > 0
             result["attempts"] = i + 1
+            _note_usage(result)
             return result
         except (_RateLimitError, _ProviderError) as e:
             _log_provider_call(p["id"], False, 0, e)
@@ -192,17 +285,34 @@ def llm_call(prompt, system="You are a helpful AI assistant.", max_tokens=2000, 
     frappe.throw(f"All LLM providers exhausted. Tried: {', '.join(tried)}")
 
 
-def analyse_document(raw_text, document_type, tenant_name=None, max_tokens=2000):
-    prompt = f"""Analyse this document (category: {document_type}) and return a JSON object with these exact keys:
-- "summary": string, 3-5 sentence summary of purpose, parties, and key points
-- "entities": string, bullet list of key names/orgs/dates/amounts/clauses found
-- "tables": array of objects, each with "headers" (array of strings) and "rows" (array of arrays). Empty array if no tables found.
+def analyse_document(raw_text, document_type, tenant_name=None, max_tokens=2000, source_format=None, output_language="en"):
+    from doc_intelligence.doc_intelligence.prompts import get_analysis_prompt, language_instruction
+    rules = get_analysis_prompt()
+    source = source_format or "unknown"
+    prompt = f"""{rules}
+
+{language_instruction(output_language)}
+
+Document category: {document_type}
+Source format: {source}
+
+Return a JSON object with these exact keys:
+- "summary": string, 2 sentences: what the document is and who the parties are. Do not include arithmetic or a rounding error
+- "entities": string, bullet list of names, TRNs, dates, amounts, and currency actually printed
+- "tables": array of objects, each with "headers" (array of strings) and "rows" (array of arrays). Empty array if no tables found. Include only real charged lines.
+- "accounting": object with these keys, using null when the value is not printed:
+  document_kind, supplier_name, supplier_address, supplier_trn,
+  buyer_name, buyer_address, buyer_trn,
+  invoice_number, invoice_date, supply_date, due_date, currency,
+  lines (array of description, qty, rate, amount, vat_rate, vat_amount),
+  taxable_amount, vat_amount, grand_total, vat_rate_stated,
+  missing_mandatory (array of strings), warnings (array of strings)
 
 Document text:
 ---
 {raw_text[:12000]}
 ---"""
-    system = "You are an expert document analyst. Extract structured information accurately."
+    system = "You are an expert document analyst for UAE bookkeeping. Extract only what is printed. Return valid JSON."
     result = llm_call(prompt, system, max_tokens, tenant_name, json_mode=True)
     try:
         parsed = json.loads(_strip_json_fences(result["text"]))
@@ -212,20 +322,23 @@ Document text:
     return parsed
 
 
-def ask_question(raw_text, title, document_type, question, tenant_name=None, max_tokens=2000):
+def ask_question(raw_text, title, document_type, question, tenant_name=None, max_tokens=2000, output_language="en"):
+    from doc_intelligence.doc_intelligence.prompts import language_instruction
     prompt = f"""Document: "{title}" ({document_type})
 ---
 {raw_text[:12000]}
 ---
 Question: {question}
 
+{language_instruction(output_language)}
 Answer the question based solely on the document content. If the information is not present, say so explicitly."""
     system = "You are a precise document Q&A assistant. Only use information from the provided document."
     result = llm_call(prompt, system, max_tokens, tenant_name)
     return {"answer": result["text"], "_meta": result}
 
 
-def compare_documents(text_a, title_a, text_b, title_b, aspect=None, tenant_name=None, max_tokens=2000):
+def compare_documents(text_a, title_a, text_b, title_b, aspect=None, tenant_name=None, max_tokens=2000, output_language="en"):
+    from doc_intelligence.doc_intelligence.prompts import language_instruction
     aspect_str = f" Focus specifically on: {aspect}." if aspect else ""
     prompt = f"""Compare these two documents and return a JSON object with keys:
 - "summary": string, 2-3 sentence overall comparison
@@ -242,7 +355,8 @@ Document B: "{title_b}"
 ---
 {text_b[:6000]}
 ---
-{aspect_str}"""
+{aspect_str}
+{language_instruction(output_language)}"""
     system = "You are an expert document comparison analyst."
     result = llm_call(prompt, system, max_tokens, tenant_name, json_mode=True)
     try:
@@ -280,8 +394,10 @@ def get_provider_health():
 import base64
 import os
 
-# Providers in PROVIDERS that can actually read images.
-_VISION_PROVIDER_IDS = {"gemini", "claude", "openrouter"}
+# Providers in PROVIDERS that can actually read images. OpenAI is included
+# because the selected model may accept images; a text-only model still fails
+# at request time and the next vision provider is tried.
+_VISION_PROVIDER_IDS = {"gemini", "claude", "openrouter", "openai"}
 
 _VISION_SYSTEM = (
     "You are an OCR and document-transcription engine. Transcribe ALL text "
@@ -312,10 +428,11 @@ def _vision_call_openai_compat(provider, image_b64, mime, max_tokens, settings):
     model = getattr(settings, provider["model_field"], None) or provider["default_model"]
     extra_headers = {}
     if provider["id"] == "openrouter":
-        extra_headers = {"HTTP-Referer": "https://github.com/aravindsprint/doc_intelligence", "X-Title": "Doc Intelligence"}
+        extra_headers = {"HTTP-Referer": "https://github.com/roysbike/nexterp-doc-intelligence", "X-Title": "Doc Intelligence"}
     try:
         client = OpenAI(api_key=key, base_url=provider["base_url"], default_headers=extra_headers, timeout=90.0, max_retries=1)
-        resp = client.chat.completions.create(
+        resp, body = _chat_create(
+            client, provider,
             model=model,
             messages=[
                 {"role": "system", "content": _VISION_SYSTEM},
@@ -324,12 +441,12 @@ def _vision_call_openai_compat(provider, image_b64, mime, max_tokens, settings):
                     {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_b64}"}},
                 ]},
             ],
-            max_tokens=max_tokens,
+            **_completion_token_limit(provider, model, max_tokens),
         )
         text = resp.choices[0].message.content
+        tokens_in, tokens_out, cost_usd = _usage_from(resp, body)
         return {"text": text, "provider": provider["id"], "model": model,
-                "tokens_in": getattr(resp.usage, "prompt_tokens", 0),
-                "tokens_out": getattr(resp.usage, "completion_tokens", 0)}
+                "tokens_in": tokens_in, "tokens_out": tokens_out, "cost_usd": cost_usd}
     except RateLimitError as e:
         raise _RateLimitError(str(e))
     except APIStatusError as e:
@@ -357,7 +474,8 @@ def _vision_call_claude(provider, image_b64, mime, max_tokens, settings):
         )
         text = resp.content[0].text
         return {"text": text, "provider": "claude", "model": model,
-                "tokens_in": resp.usage.input_tokens, "tokens_out": resp.usage.output_tokens}
+                "tokens_in": resp.usage.input_tokens, "tokens_out": resp.usage.output_tokens,
+                "cost_usd": None}
     except anthropic.RateLimitError as e:
         raise _RateLimitError(str(e))
     except Exception as e:
@@ -371,8 +489,8 @@ def vision_extract_text(image_path, tenant_name=None, max_tokens=4000):
     providers = [p for p in all_providers if p["id"] in _VISION_PROVIDER_IDS]
     if not providers:
         frappe.throw(
-            "No vision-capable LLM provider configured. Add a Gemini or Claude "
-            "API key in Doc Intelligence Settings to process images."
+        "No vision-capable LLM provider configured. Add an OpenRouter, Gemini, "
+        "Claude, or OpenAI key in Doc Intelligence Settings to process images."
         )
 
     # image_path is not raw user input; it's constructed by extract_text()
@@ -395,6 +513,7 @@ def vision_extract_text(image_path, tenant_name=None, max_tokens=4000):
                 else:
                     result = _vision_call_claude(p, image_b64, mime, max_tokens, settings)
                 _log_provider_call(p["id"], True, result.get("tokens_out", 0))
+                _note_usage(result)
                 return result.get("text", "")
             except _RateLimitError as e:
                 if attempt < 2:
@@ -444,7 +563,8 @@ def _vision_call_gemini_native(provider, image_b64, mime, max_tokens, settings):
         usage = data.get("usageMetadata", {})
         return {"text": text, "provider": "gemini", "model": model,
                 "tokens_in": usage.get("promptTokenCount", 0),
-                "tokens_out": usage.get("candidatesTokenCount", 0)}
+                "tokens_out": usage.get("candidatesTokenCount", 0),
+                "cost_usd": None}
     except (_RateLimitError, _ProviderError):
         raise
     except Exception as e:

@@ -12,7 +12,7 @@ class AIDocument(Document):
         if self.file_attachment and self.status == "Pending":
             frappe.enqueue(
                 "doc_intelligence.doc_intelligence.doctype.ai_document.ai_document.process_document",
-                doc_name=self.name, queue="long", timeout=300,
+                doc_name=self.name, queue="long", timeout=900,
             )
 
     def on_update(self):
@@ -28,7 +28,7 @@ class AIDocument(Document):
         if self.status == "Pending" and self.file_attachment and not self.is_new():
             frappe.enqueue(
                 "doc_intelligence.doc_intelligence.doctype.ai_document.ai_document.process_document",
-                doc_name=self.name, queue="long", timeout=300,
+                doc_name=self.name, queue="long", timeout=900,
             )
 
 
@@ -78,26 +78,78 @@ def _as_text(value):
     return str(value)
 
 
+def _store_usage(doc, usage, replace):
+    """Write summed tokens and, when the provider priced the call, the AED cost."""
+    from doc_intelligence.doc_intelligence.llm_engine import aed_per_usd
+    incoming_in = int((usage or {}).get("tokens_in") or 0)
+    incoming_out = int((usage or {}).get("tokens_out") or 0)
+    if replace:
+        doc.prompt_tokens = incoming_in
+        doc.completion_tokens = incoming_out
+    else:
+        doc.prompt_tokens = int(doc.prompt_tokens or 0) + incoming_in
+        doc.completion_tokens = int(doc.completion_tokens or 0) + incoming_out
+    doc.token_count = int(doc.prompt_tokens or 0) + int(doc.completion_tokens or 0)
+    if (usage or {}).get("priced"):
+        added = float(usage.get("cost_usd") or 0)
+        base = 0.0 if replace else float(doc.cost_usd or 0)
+        doc.cost_usd = round(base + added, 6)
+        doc.cost_aed = round(doc.cost_usd * aed_per_usd(), 4)
+    elif replace:
+        doc.cost_usd = None
+        doc.cost_aed = None
+
+
 def process_document(doc_name):
+    from doc_intelligence.doc_intelligence.llm_engine import begin_usage, take_usage
     doc = frappe.get_doc("AI Document", doc_name)
+    usage = None
+    begin_usage()
     try:
         doc.status = "Processing"
         doc.save(ignore_permissions=True)
         frappe.db.commit()  # nosemgrep: frappe-manual-commit -- must be visible before the long-running LLM call, in case the job is killed mid-flight
 
-        raw_text = extract_text(doc.file_attachment)
+        raw_text, source_format = extract_text(doc.file_attachment)
         doc.raw_text = raw_text
+        doc.source_format = source_format
 
         settings = frappe.get_single("Doc Intelligence Settings")
         from doc_intelligence.doc_intelligence.llm_engine import analyse_document
-        result = analyse_document(raw_text, doc.document_type or "Document", None, settings.max_tokens_per_request or 2000)
+        token_limit = int(settings.max_tokens_per_request or 4000)
+        if token_limit < 4000:
+            token_limit = 4000
+        from doc_intelligence.doc_intelligence.prompts import output_language
+        language = output_language(doc.owner)
+        result = analyse_document(
+            raw_text,
+            doc.document_type or "Document",
+            None,
+            token_limit,
+            source_format=source_format,
+            output_language=language,
+        )
 
-        doc.summary = _as_text(result.get("summary", ""))
-        doc.key_entities = _as_text(result.get("entities", ""))
+        from doc_intelligence.doc_intelligence.accountant_summary import (
+            accountant_summary,
+            replace_arithmetic_warnings,
+        )
+        model_summary = _as_text(result.get("summary", ""))
+        entities = _as_text(result.get("entities", ""))
+        accounting = result.get("accounting")
+        if isinstance(accounting, dict):
+            accounting = replace_arithmetic_warnings(accounting, language)
+        doc.summary = accountant_summary(accounting, language, model_summary) or model_summary
+        if accounting:
+            heading = "Invoice field check" if language == "en" else "Проверка полей счёта"
+            doc.key_entities = heading + ":\n" + _as_text(accounting) + ("\n\n" + entities if entities else "")
+        else:
+            doc.key_entities = entities
         tables = result.get("tables", [])
         doc.extracted_table = json.dumps(tables) if tables else ""
         meta = result.get("_meta", {})
-        doc.token_count = meta.get("tokens_out", 0)
+        usage = take_usage()
+        _store_usage(doc, usage, replace=True)
         doc.provider_used = meta.get("provider", "")
         if meta.get("fallback_used"):
             doc.provider_used = f"{meta.get('provider')} (fallback)"
@@ -106,8 +158,11 @@ def process_document(doc_name):
         doc.save(ignore_permissions=True)
         frappe.db.commit()  # nosemgrep: frappe-manual-commit -- background job, commits its own result explicitly
 
-    except Exception:
+    except Exception as exc:
         frappe.log_error(frappe.get_traceback(), f"AI Document processing failed: {doc_name}")
+        if usage is None:
+            usage = take_usage()
+        failure_note = str(exc).strip().replace("\n", " ")[:500]
         # This save must never itself be allowed to fail silently — if it
         # does (a validation error, a timestamp race with another worker,
         # anything), the document is left permanently stuck instead of
@@ -116,11 +171,19 @@ def process_document(doc_name):
         try:
             doc.reload()
             doc.status = "Failed"
+            if failure_note:
+                doc.summary = failure_note
+            if usage:
+                _store_usage(doc, usage, replace=True)
             doc.save(ignore_permissions=True)
             frappe.db.commit()  # nosemgrep: frappe-manual-commit -- failure path must land even if the rest of the job never committed
         except Exception:
             frappe.log_error(frappe.get_traceback(), f"AI Document failure-handling itself failed: {doc_name}")
-            frappe.db.set_value("AI Document", doc_name, "status", "Failed", update_modified=True)
+            frappe.db.set_value(
+                "AI Document", doc_name,
+                {"status": "Failed", "summary": failure_note},
+                update_modified=True,
+            )
             frappe.db.commit()  # nosemgrep: frappe-manual-commit -- last-resort fallback, must guarantee the status change lands
 
 
@@ -131,18 +194,6 @@ def extract_text(file_url):
     else:
         file_path = os.path.join(site_path, "public", "files", os.path.basename(file_url))
 
-    ext = os.path.splitext(file_path)[1].lower()
-
-    if ext == ".pdf":
-        from pypdf import PdfReader
-        reader = PdfReader(file_path)
-        return "\n".join(page.extract_text() or "" for page in reader.pages)
-    elif ext == ".docx":
-        from docx import Document
-        d = Document(file_path)
-        return "\n".join(p.text for p in d.paragraphs)
-    elif ext in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
-        from doc_intelligence.doc_intelligence.llm_engine import vision_extract_text
-        return vision_extract_text(file_path)
-    else:
-        frappe.throw(f"Unsupported file type: {ext}. Supported: PDF, DOCX, and images (JPG/PNG/WEBP).")
+    from doc_intelligence.doc_intelligence.file_text import extract_file_text
+    from doc_intelligence.doc_intelligence.llm_engine import vision_extract_text
+    return extract_file_text(file_path, vision_extract_text)

@@ -1,39 +1,41 @@
 <template>
   <div class="di-modal-backdrop" @click.self="$emit('close')">
     <div class="di-modal di-card">
-      <h2>Upload Document</h2>
+      <h2>{{ t('upload.title') }}</h2>
 
       <div v-if="error" class="di-error">{{ error }}</div>
 
       <!-- Single-file mode: title + type apply to the one file -->
       <template v-if="mode !== 'batch'">
-        <label class="di-label">Title</label>
-        <input v-model="title" class="di-input" placeholder="e.g. Vendor Agreement — Acme Ltd" />
+        <label class="di-label">{{ t('upload.titleLabel') }}</label>
+        <input v-model="title" class="di-input" :placeholder="t('upload.titlePlaceholder')" />
 
-        <label class="di-label" style="margin-top:12px">Document type</label>
+        <label class="di-label" style="margin-top:12px">{{ t('upload.type') }}</label>
         <select v-model="documentType" class="di-select">
-          <option v-for="t in types" :key="t" :value="t">{{ t }}</option>
+          <option v-for="kind in types" :key="kind" :value="kind">{{ typeOption(kind) }}</option>
         </select>
+        <p class="di-hint">{{ t('upload.hint') }}</p>
       </template>
 
       <!-- Batch mode: type applies to all files, each keeps its own filename as title -->
       <template v-else>
-        <label class="di-label">Document type (applies to all {{ batchFiles.length }} files)</label>
+        <label class="di-label">{{ t('upload.typeBatch', { n: batchFiles.length }) }}</label>
         <select v-model="documentType" class="di-select">
-          <option v-for="t in types" :key="t" :value="t">{{ t }}</option>
+          <option v-for="kind in types" :key="kind" :value="kind">{{ typeOption(kind) }}</option>
         </select>
+        <p class="di-hint">{{ t('upload.hint') }}</p>
       </template>
 
-      <label class="di-label" style="margin-top:12px">File</label>
+      <label class="di-label" style="margin-top:12px">{{ t('upload.file') }}</label>
 
       <!-- Nothing chosen yet: initial choices -->
       <div v-if="!file && !batchFiles.length && !capturedPhotos.length" class="di-file-choices">
         <label class="di-btn secondary di-file-choice">
-          📁 Choose File(s)
+          {{ t('upload.choose') }}
           <input type="file" accept="*/*" multiple @change="onFilesChosen" class="di-hidden-input" />
         </label>
         <button type="button" class="di-btn secondary di-file-choice" @click="captureNextPhoto">
-          📷 Take Photo
+          {{ t('upload.photo') }}
         </button>
       </div>
 
@@ -76,14 +78,14 @@
       </div>
 
       <div class="di-modal-actions">
-        <button class="di-btn secondary" @click="$emit('close')">Cancel</button>
+        <button class="di-btn secondary" @click="$emit('close')">{{ t('upload.cancel') }}</button>
         <button
           v-if="mode !== 'batch'"
           class="di-btn primary"
           :disabled="!canSubmitSingle || uploading || capturedPhotos.length"
           @click="submitSingle"
         >
-          {{ uploading ? 'Uploading…' : 'Upload' }}
+          {{ uploading ? t('upload.uploading') : t('upload.upload') }}
         </button>
         <button
           v-else
@@ -102,11 +104,16 @@
 import { ref, computed, onBeforeUnmount } from 'vue'
 import { useDocumentsStore } from '@/stores/documents'
 import { jsPDF } from 'jspdf'
+import { t } from '@/i18n'
 
 const emit = defineEmits(['close', 'uploaded'])
 const store = useDocumentsStore()
 
-const types = ['Entities', 'Transactions']
+const types = ['Entities', 'Transactions', 'Statements']
+
+function typeOption(kind) {
+  return `${t('type.' + kind)} (${t('upload.note.' + kind)})`
+}
 
 const title = ref('')
 const documentType = ref('Entities')

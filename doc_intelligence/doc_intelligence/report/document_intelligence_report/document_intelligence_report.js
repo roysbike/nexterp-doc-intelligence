@@ -4,7 +4,7 @@ frappe.query_reports["Document Intelligence Report"] = {
         {fieldname:"to_date",   label:"To Date",   fieldtype:"Date"},
         {
             fieldname:"document_type", label:"Document Type", fieldtype:"Select",
-            options: ["","Entities","Transactions"].join("\n")
+            options: ["","Entities","Transactions","Statements"].join("\n")
         },
         {
             fieldname:"status", label:"Status", fieldtype:"Select",

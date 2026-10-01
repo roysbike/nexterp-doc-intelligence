@@ -172,6 +172,8 @@ export const deleteDocument = (doc_name) => call(`${APP}.delete_document`, { doc
 export const bulkDeleteDocuments = (doc_names) => call(`${APP}.bulk_delete_documents`, { doc_names }).then(r => r.message)
 export const uploadDocument = (title, document_type, file_url) =>
   call(`${APP}.upload_document`, { title, document_type, file_url }).then(r => r.message)
+export const setUiLanguage = (language) =>
+  call(`${APP}.set_ui_language`, { language }).then(r => r.message)
 export const askDocument = (doc_name, question) =>
   call(`${APP}.ask_document`, { doc_name, question }).then(r => r.message)
 export const compareDocuments = (doc_name_a, doc_name_b, aspect) =>
@@ -197,6 +199,11 @@ export const extractTransaction = (doc_name, txn_type) =>
   call(`${APP}.extract_transaction`, { doc_name, txn_type }).then(r => r.message)
 export const createTransactionDoc = (txn_type, header, items, confirm_duplicate = 0) =>
   call(`${APP}.create_transaction_doc`, { txn_type, header, items, confirm_duplicate }).then(r => r.message)
+
+export const extractBankStatement = (doc_name) =>
+  call(`${APP}.extract_bank_statement`, { doc_name }).then(r => r.message)
+export const exportStatementCsv = (doc_name, target, transactions, currency) =>
+  call(`${APP}.export_statement_csv`, { doc_name, target, transactions, currency }).then(r => r.message)
 
 // ── Ask ERPNext (copilot.py) ───────────────────────────────────────────────
 export const copilotDemoPrompts  = () => call(`${APP}.copilot_demo_prompts`).then(r => r.message)

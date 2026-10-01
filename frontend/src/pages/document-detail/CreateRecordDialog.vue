@@ -1,25 +1,25 @@
 <template>
   <div class="di-modal-backdrop" @click.self="close">
-    <div class="di-modal di-card di-modal-wide">
-      <h2>Create ERPNext Record</h2>
+    <div class="di-modal di-card di-modal-wide di-modal-sheet">
+      <h2>{{ t('create.title') }}</h2>
       <div v-if="error" class="di-error">{{ error }}</div>
 
       <!-- Step 1: choose target -->
       <template v-if="step === 1">
-        <label class="di-label">What do you want to create from this document?</label>
+        <label class="di-label">{{ t('create.prompt') }}</label>
         <select v-model="target" class="di-select">
-          <optgroup label="Entities">
-            <option v-for="t in entityTypes" :key="t" :value="t">{{ t }}</option>
+          <optgroup :label="t('create.entities')">
+            <option v-for="kind in entityTypes" :key="kind" :value="kind">{{ targetLabel(kind) }}</option>
           </optgroup>
-          <optgroup label="Transactions">
-            <option value="Purchase Invoice">Purchase Invoice</option>
-            <option v-for="t in txnTypes" :key="t" :value="t">{{ t }}</option>
+          <optgroup :label="t('create.transactions')">
+            <option value="Purchase Invoice">{{ targetLabel('Purchase Invoice') }}</option>
+            <option v-for="kind in txnTypes" :key="kind" :value="kind">{{ targetLabel(kind) }}</option>
           </optgroup>
         </select>
         <div class="di-modal-actions">
-          <button class="di-btn secondary" @click="close">Cancel</button>
+          <button class="di-btn secondary" @click="close">{{ t('create.cancel') }}</button>
           <button class="di-btn primary" :disabled="extracting" @click="extract">
-            {{ extracting ? 'Asking AI…' : 'Extract with AI' }}
+            {{ extracting ? t('create.extracting') : t('create.extract') }}
           </button>
         </div>
       </template>
@@ -30,16 +30,9 @@
 
         <!-- Purchase Invoice: financial validation + supplier ambiguity + duplicate warnings -->
         <template v-if="mode === 'pi'">
-          <div v-if="piValidation" class="di-risk-banner" :class="piValidation.risk_level === 'HIGH' ? 'risk-high' : 'risk-low'">
-            <strong>{{ piValidation.risk_level === 'HIGH' ? '⚠ Totals don\'t match' : '✓ Totals check out' }}</strong>
-            <div class="di-risk-detail">
-              AI-reported total: {{ header.currency }} {{ piValidation.detected_grand_total }} ·
-              Recalculated from line items: {{ header.currency }} {{ piValidation.calculated_grand_total }}
-              <span v-if="piValidation.risk_level === 'HIGH'"> · Mismatch: {{ header.currency }} {{ piValidation.mismatch_amount }}</span>
-            </div>
-            <div v-if="piValidation.risk_level === 'HIGH'" class="di-risk-detail">
-              Double-check the line items and tax amount below before creating this invoice.
-            </div>
+          <div v-if="printedTotal != null" class="di-risk-banner" :class="sumMismatch ? 'risk-high' : 'risk-low'">
+            <strong>{{ sumMismatch ? t('totals.mismatch') : t('totals.ok') }}</strong>
+            <div class="di-risk-detail">{{ totalsDetail }}</div>
           </div>
 
           <div v-if="supplierMultipleMatches" class="di-risk-banner risk-high">
@@ -68,16 +61,9 @@
 
         <!-- Transaction: financial validation + party ambiguity + duplicate warnings -->
         <template v-if="mode === 'txn'">
-          <div v-if="txnValidation" class="di-risk-banner" :class="txnValidation.risk_level === 'HIGH' ? 'risk-high' : 'risk-low'">
-            <strong>{{ txnValidation.risk_level === 'HIGH' ? '⚠ Totals don\'t match' : '✓ Totals check out' }}</strong>
-            <div class="di-risk-detail">
-              AI-reported total: {{ header.currency }} {{ txnValidation.detected_grand_total }} ·
-              Recalculated from line items: {{ header.currency }} {{ txnValidation.calculated_grand_total }}
-              <span v-if="txnValidation.risk_level === 'HIGH'"> · Mismatch: {{ header.currency }} {{ txnValidation.mismatch_amount }}</span>
-            </div>
-            <div v-if="txnValidation.risk_level === 'HIGH'" class="di-risk-detail">
-              Double-check the line items below before creating this {{ target }}.
-            </div>
+          <div v-if="printedTotal != null" class="di-risk-banner" :class="sumMismatch ? 'risk-high' : 'risk-low'">
+            <strong>{{ sumMismatch ? t('totals.mismatch') : t('totals.ok') }}</strong>
+            <div class="di-risk-detail">{{ totalsDetail }}</div>
           </div>
 
           <div v-if="partyMultipleMatches" class="di-risk-banner risk-high">
@@ -155,7 +141,7 @@
                 @update:modelValue="() => { header.matched_party = null }"
               />
             </div>
-            <div>
+            <div class="di-company-field">
               <label class="di-label">Company</label>
               <select v-model="header.company" class="di-select">
                 <option v-for="c in companies" :key="c.name" :value="c.name">{{ c.name }}</option>
@@ -171,25 +157,32 @@
               <input v-if="mode === 'pi'" v-model="header.bill_date" type="date" class="di-input" />
               <input v-else v-model="header.valid_till" type="date" class="di-input" />
             </div>
-            <div>
-              <label class="di-label">Currency</label>
-              <input v-model="header.currency" class="di-input" />
+            <div class="di-currency-field">
+              <label class="di-label">{{ t('currency.label') }}</label>
+              <select v-model="header.currency" class="di-select">
+                <option v-if="!header.currency" value="">{{ t('currency.pick') }}</option>
+                <option v-for="c in currencies" :key="c.name" :value="c.name">{{ c.name }}</option>
+              </select>
+              <p class="di-hint">{{ printedCurrency ? t('currency.printed', { code: printedCurrency }) : t('currency.fallback') }}</p>
             </div>
           </div>
 
-          <label class="di-label" style="margin-top:14px">Line items</label>
-          <table class="di-item-table">
-            <thead><tr><th>Item</th><th>Qty</th><th>Rate</th><th>UOM</th><th></th></tr></thead>
-            <tbody>
-              <tr v-for="(it, i) in items" :key="i">
-                <td><input v-model="it.item_name" class="di-input" /></td>
-                <td><input v-model.number="it.qty" type="number" class="di-input" /></td>
-                <td><input v-model.number="it.rate" type="number" class="di-input" /></td>
-                <td><input v-model="it.uom" class="di-input" /></td>
-                <td><button class="di-btn secondary" @click="items.splice(i,1)">✕</button></td>
-              </tr>
-            </tbody>
-          </table>
+          <label class="di-label" style="margin-top:14px">Line items ({{ items.length }})</label>
+          <div class="di-items-scroll">
+            <table class="di-item-table">
+              <thead><tr><th>Item</th><th>Qty</th><th>Rate</th><th>UOM</th><th></th></tr></thead>
+              <tbody>
+                <tr v-for="(it, i) in items" :key="i">
+                  <td><input v-model="it.item_name" class="di-input" /></td>
+                  <td><input v-model.number="it.qty" type="number" class="di-input" /></td>
+                  <td><input v-model.number="it.rate" type="number" class="di-input" /></td>
+                  <td><input v-model="it.uom" class="di-input" /></td>
+                  <td><button class="di-btn secondary" @click="items.splice(i,1)">✕</button></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="di-line-sum">{{ t('totals.lines', { currency: header.currency || '', sum: money(lineSum) }) }}</div>
           <button class="di-btn secondary" style="margin-top:8px" @click="items.push({ item_name:'', qty:1, rate:0, uom:'Nos' })">+ Add line</button>
         </template>
 
@@ -216,16 +209,21 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import * as api from '@/api/frappe'
 import { getList } from '@/api/frappe'
 import LinkField from '@/components/LinkField.vue'
+import { t } from '@/i18n'
 
 const props = defineProps({ docName: { type: String, required: true } })
 const emit = defineEmits(['close', 'created'])
 
 const entityTypes = ['Item', 'Supplier', 'Customer', 'Employee', 'Address', 'Contact', 'Warehouse']
 const txnTypes = ['Quotation', 'Sales Order', 'Purchase Order', 'Material Request']
+
+function targetLabel(name) {
+  return `${name} (${t('target.' + name)})`
+}
 
 const LINK_FIELD_MAP = {
   Item: { item_group: 'Item Group', stock_uom: 'UOM', brand: 'Brand', hsn_code: 'GST HSN Code' },
@@ -262,6 +260,42 @@ const fields = ref({})
 const header = ref({})
 const items = ref([])
 const companies = ref([])
+const currencies = ref([])
+const printedCurrency = ref('')
+
+const lineSum = computed(() => {
+  const total = items.value.reduce((sum, it) => sum + (Number(it.qty) || 0) * (Number(it.rate) || 0), 0)
+  return Math.round(total * 100) / 100
+})
+
+const printedTotal = computed(() => {
+  const source = mode.value === 'pi' ? piValidation.value : txnValidation.value
+  const value = Number(source?.detected_grand_total)
+  return Number.isFinite(value) && value > 0 ? Math.round(value * 100) / 100 : null
+})
+
+const sumGap = computed(() => {
+  if (printedTotal.value == null) return null
+  return Math.round((lineSum.value - printedTotal.value) * 100) / 100
+})
+
+const sumMismatch = computed(() => sumGap.value != null && Math.abs(sumGap.value) > 0.05)
+
+const totalsDetail = computed(() => {
+  const currency = header.value.currency || ''
+  const parts = [t('totals.lines', { currency, sum: money(lineSum.value) })]
+  if (printedTotal.value != null) {
+    parts.push(t('totals.printed', { currency, sum: money(printedTotal.value) }))
+  }
+  if (sumMismatch.value) {
+    parts.push(t('totals.gap', { currency, sum: money(Math.abs(sumGap.value)) }))
+  }
+  return parts.join(' · ')
+})
+
+function money(value) {
+  return Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
 const created = ref(null)
 
 const piValidation = ref(null)
@@ -281,6 +315,12 @@ const partyMultipleMatches = ref(false)
 
 function close() { emit('close') }
 
+watch(() => header.value.company, (company) => {
+  if (printedCurrency.value || !company) return
+  const next = companyCurrency(company)
+  if (next) header.value.currency = next
+})
+
 function prettyLabel(key) {
   return key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
@@ -288,8 +328,31 @@ function prettyLabel(key) {
 async function loadCompanies() {
   if (companies.value.length) return
   try {
-    companies.value = await getList('Company', { fields: ['name'], limit: 50 })
+    companies.value = await getList('Company', { fields: ['name', 'default_currency'], limit: 50 })
   } catch { /* non-fatal — company select will just be empty */ }
+}
+
+async function loadCurrencies() {
+  if (currencies.value.length) return
+  try {
+    currencies.value = await getList('Currency', { fields: ['name'], limit: 300, orderBy: 'name asc' })
+  } catch {
+    currencies.value = []
+  }
+}
+
+function companyCurrency(companyName) {
+  return companies.value.find(c => c.name === companyName)?.default_currency || ''
+}
+
+function resolveCurrency(printed) {
+  const code = String(printed || '').trim().toUpperCase()
+  printedCurrency.value = code
+  const selected = code || companyCurrency(header.value.company)
+  if (selected && !currencies.value.some(c => c.name === selected)) {
+    currencies.value = [{ name: selected }, ...currencies.value]
+  }
+  return selected
 }
 
 async function extract() {
@@ -299,7 +362,7 @@ async function extract() {
   try {
     if (target.value === 'Purchase Invoice') {
       mode.value = 'pi'
-      await loadCompanies()
+      await Promise.all([loadCompanies(), loadCurrencies()])
       const res = await api.createPurchaseInvoice(props.docName)
       header.value = {
         supplier_name: res.supplier_name,
@@ -308,10 +371,11 @@ async function extract() {
         bill_date: res.extracted?.bill_date,
         posting_date: res.extracted?.posting_date,
         due_date: res.extracted?.due_date,
-        currency: res.extracted?.currency || 'INR',
+        currency: '',
         remarks: res.extracted?.remarks,
         company: companies.value[0]?.name || ''
       }
+      header.value.currency = resolveCurrency(res.extracted?.currency)
       items.value = res.items || []
       piValidation.value = res.validation || null
       piDuplicate.value = res.duplicate_of || null
@@ -328,7 +392,7 @@ async function extract() {
       entityMultipleMatches.value = !!res.match_multiple
     } else {
       mode.value = 'txn'
-      await loadCompanies()
+      await Promise.all([loadCompanies(), loadCurrencies()])
       const res = await api.extractTransaction(props.docName, target.value)
       header.value = {
         party_type: res.party_type,
@@ -336,10 +400,11 @@ async function extract() {
         matched_party: res.matched_party,
         transaction_date: res.extracted?.transaction_date,
         valid_till: res.extracted?.valid_till,
-        currency: res.extracted?.currency || 'INR',
+        currency: '',
         remarks: res.extracted?.remarks,
         company: companies.value[0]?.name || ''
       }
+      header.value.currency = resolveCurrency(res.extracted?.currency)
       items.value = res.items || []
       txnValidation.value = res.validation || null
       txnDuplicate.value = res.duplicate_of || null
@@ -406,11 +471,15 @@ async function createRecord() {
 <style scoped>
 .di-modal-backdrop {
   position: fixed; inset: 0; background: rgba(15,23,42,.5);
-  display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px; overflow-y: auto;
+  display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px;
 }
-.di-modal-wide { width: 100%; max-width: 640px; }
-.di-modal h2 { margin: 0 0 14px; font-size: 17px; color: var(--di-navy); }
-.di-modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+.di-modal-wide { width: 100%; max-width: 920px; }
+.di-modal-sheet {
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+}
+.di-modal h2 { margin: 0 0 14px; font-size: 17px; color: var(--di-navy); flex: 0 0 auto; }
+.di-modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 12px; flex: 0 0 auto; }
 .di-notice {
   background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af;
   border-radius: 8px; padding: 8px 12px; font-size: 13px; margin-bottom: 14px;
@@ -427,10 +496,34 @@ async function createRecord() {
 .di-risk-detail { margin-top: 4px; font-weight: 400; }
 .di-checkbox-row { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
 .di-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.di-hint { font-size: 12px; color: var(--di-muted); margin-top: 10px; }
-.di-item-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-.di-item-table th { text-align: left; font-size: 11px; color: var(--di-muted); padding: 4px 6px; }
+.di-form-grid > * { min-width: 0; }
+.di-company-field, .di-currency-field { grid-column: 1 / -1; }
+.di-company-field .di-select, .di-currency-field .di-select { width: 100%; }
+.di-hint { font-size: 12px; color: var(--di-muted); margin-top: 8px; }
+.di-items-scroll {
+  min-height: 140px;
+  max-height: 38vh;
+  overflow: auto;
+  border: 1px solid var(--di-border, #e5e7eb);
+  border-radius: 8px;
+  margin-top: 8px;
+}
+.di-item-table { width: 100%; border-collapse: collapse; margin-top: 0; }
+.di-item-table th {
+  text-align: left; font-size: 11px; color: var(--di-muted); padding: 6px;
+  position: sticky; top: 0; background: #fff; z-index: 1;
+}
 .di-item-table td { padding: 4px 6px; }
+.di-item-table th:nth-child(1), .di-item-table td:nth-child(1) { width: 46%; }
+.di-item-table th:nth-child(2), .di-item-table td:nth-child(2),
+.di-item-table th:nth-child(3), .di-item-table td:nth-child(3) { width: 14%; }
+.di-item-table th:nth-child(4), .di-item-table td:nth-child(4) { width: 16%; }
+.di-line-sum {
+  margin-top: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--di-navy);
+}
 .di-success { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 24px 0; text-align: center; }
 .di-success-icon {
   width: 40px; height: 40px; border-radius: 50%; background: #dcfce7; color: #166534;

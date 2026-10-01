@@ -6,7 +6,7 @@ build-backend = "flit_core.buildapi"
 name = "doc_intelligence"
 version = "1.0.0"
 description = "Doc Intelligence — AI-powered document analysis for Frappe/ERPNext"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 readme = "README.md"
 license = { text = "MIT" }
 dependencies = [
@@ -14,10 +14,11 @@ dependencies = [
     "anthropic>=0.25.0",
     "pypdf>=4.0.0",
     "python-docx>=1.0.0",
+    "pymupdf>=1.24.0",
 ]
 
 [tool.flit.module]
 name = "doc_intelligence"
 
 [tool.bench.frappe-dependencies]
-frappe = ">=14.0.0,<17.0.0"
+frappe = ">=16.0.0,<17.0.0"

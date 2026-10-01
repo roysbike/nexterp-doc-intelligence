@@ -1,8 +1,8 @@
 <template>
   <div>
     <div class="di-page-head">
-      <h1>Documents</h1>
-      <button class="di-btn primary" @click="showUpload = true">+ Upload Document</button>
+      <h1>{{ t('home.title') }}</h1>
+      <button class="di-btn primary" @click="showUpload = true">{{ t('home.upload') }}</button>
     </div>
 
     <div class="di-filters">
@@ -10,35 +10,35 @@
         v-model="searchQuery"
         type="text"
         class="di-input di-search-input"
-        placeholder="Search by title…"
+        :placeholder="t('home.search')"
         @input="onSearchInput"
       />
       <select v-model="statusFilter" class="di-select" @change="reload">
-        <option value="">All statuses</option>
-        <option v-for="s in statuses" :key="s" :value="s">{{ s }}</option>
+        <option value="">{{ t('home.allStatuses') }}</option>
+        <option v-for="s in statuses" :key="s" :value="s">{{ t('status.' + s) }}</option>
       </select>
       <select v-model="typeFilter" class="di-select" @change="reload">
-        <option value="">All types</option>
-        <option v-for="t in types" :key="t" :value="t">{{ t }}</option>
+        <option value="">{{ t('home.allTypes') }}</option>
+        <option v-for="kind in types" :key="kind" :value="kind">{{ t('type.' + kind) }}</option>
       </select>
     </div>
 
     <div v-if="selectedIds.length" class="di-selection-bar">
-      <span>{{ selectedIds.length }} selected</span>
+      <span>{{ selectedIds.length }} {{ t('home.selected') }}</span>
       <div class="di-selection-actions">
-        <button class="di-btn secondary" @click="clearSelection">Clear</button>
+        <button class="di-btn secondary" @click="clearSelection">{{ t('home.clear') }}</button>
         <button class="di-btn danger" :disabled="deleting" @click="confirmBulkDelete">
-          {{ deleting ? 'Deleting…' : (confirmingBulkDelete ? 'Click again to confirm' : `Delete ${selectedIds.length}`) }}
+          {{ deleting ? t('home.deleting') : (confirmingBulkDelete ? t('home.confirmDelete') : t('home.deleteN', { n: selectedIds.length })) }}
         </button>
       </div>
     </div>
 
     <div v-if="store.error" class="di-error">{{ store.error }}</div>
 
-    <div v-if="store.loading && !store.documents.length" class="di-empty">Loading…</div>
+    <div v-if="store.loading && !store.documents.length" class="di-empty">{{ t('home.loading') }}</div>
 
     <div v-else-if="!store.documents.length" class="di-empty">
-      No documents yet. Upload one to get started.
+      {{ t('home.empty') }}
     </div>
 
     <div v-else class="di-doc-grid">
@@ -59,13 +59,14 @@
           </svg>
         </div>
         <div class="di-doc-card-top">
-          <span class="di-badge" :class="doc.status.toLowerCase()">{{ doc.status }}</span>
-          <span class="di-doc-type">{{ doc.document_type }}</span>
+          <span class="di-badge" :class="doc.status.toLowerCase()">{{ t('status.' + doc.status) }}</span>
+          <span class="di-doc-type">{{ t('type.' + doc.document_type) }}</span>
         </div>
         <div class="di-doc-title">{{ doc.title }}</div>
         <div class="di-doc-meta">
-          <span v-if="doc.provider_used">via {{ doc.provider_used }}</span>
-          <span v-if="doc.token_count">{{ doc.token_count }} tokens</span>
+          <span v-if="doc.provider_used">{{ t('home.via') }} {{ doc.provider_used }}</span>
+          <span v-if="doc.token_count">{{ doc.token_count }} {{ t('home.tokens') }}</span>
+          <span v-if="doc.cost_aed !== null && doc.cost_aed !== undefined && doc.cost_aed !== ''">{{ Number(doc.cost_aed).toFixed(4) }} AED</span>
         </div>
       </router-link>
     </div>
@@ -79,6 +80,7 @@ import { ref, onMounted } from 'vue'
 import { useDocumentsStore } from '@/stores/documents'
 import * as api from '@/api/frappe'
 import UploadDialog from './UploadDialog.vue'
+import { t } from '@/i18n'
 
 const store = useDocumentsStore()
 const statusFilter = ref('')
@@ -87,7 +89,7 @@ const searchQuery = ref('')
 const showUpload = ref(false)
 
 const statuses = ['Pending', 'Processing', 'Ready', 'Failed']
-const types = ['Entities', 'Transactions']
+const types = ['Entities', 'Transactions', 'Statements']
 
 let searchDebounceTimer = null
 function onSearchInput() {

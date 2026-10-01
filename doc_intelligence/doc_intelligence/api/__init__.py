@@ -18,7 +18,7 @@ def list_documents(status=None, document_type=None, search=None, limit=20, offse
         filters["title"] = ["like", f"%{search}%"]
     docs = frappe.get_list(
         "AI Document", filters=filters,
-        fields=["name","title","document_type","status","processed_on","token_count","provider_used","creation","owner"],
+        fields=["name","title","document_type","status","processed_on","token_count","prompt_tokens","completion_tokens","cost_aed","provider_used","creation","owner"],
         order_by="creation desc", limit=cint(limit), start=cint(offset),
     )
     return {"data": docs, "total": frappe.db.count("AI Document", filters=filters)}
@@ -87,6 +87,13 @@ def bulk_delete_documents(doc_names):
 
 
 @frappe.whitelist()
+def set_ui_language(language):
+    language = "en" if language == "en" else "ru"
+    frappe.defaults.set_user_default("doc_intelligence_language", language)
+    return {"language": language}
+
+
+@frappe.whitelist()
 def upload_document(title, document_type, file_url):
     doc = frappe.get_doc({"doctype": "AI Document", "title": title, "document_type": document_type, "file_attachment": file_url, "status": "Pending"})
     doc.insert()
@@ -95,17 +102,24 @@ def upload_document(title, document_type, file_url):
 
 @frappe.whitelist()
 def ask_document(doc_name, question):
-    from doc_intelligence.doc_intelligence.llm_engine import ask_question
+    from doc_intelligence.doc_intelligence.llm_engine import ask_question, begin_usage, take_usage
+    from doc_intelligence.doc_intelligence.doctype.ai_document.ai_document import _store_usage
     doc = frappe.get_doc("AI Document", doc_name)
     if doc.status != "Ready":
         frappe.throw("Document must be in Ready status before asking questions.")
     settings = frappe.get_single("Doc Intelligence Settings")
-    result = ask_question(doc.raw_text, doc.title, doc.document_type, question, frappe.session.user, settings.max_tokens_per_request or 2000)
+    begin_usage()
+    try:
+        from doc_intelligence.doc_intelligence.prompts import output_language
+        result = ask_question(doc.raw_text, doc.title, doc.document_type, question, frappe.session.user, settings.max_tokens_per_request or 2000, output_language())
+    finally:
+        usage = take_usage()
     tokens = (result.get("_meta") or {}).get("tokens_out", 0)
     doc.user_question = question
     doc.ai_answer = result.get("answer", "")
+    _store_usage(doc, usage, replace=False)
     doc.save(ignore_permissions=True)
-    return {"answer": doc.ai_answer, "provider": (result.get("_meta") or {}).get("provider"), "tokens": tokens}
+    return {"answer": doc.ai_answer, "provider": (result.get("_meta") or {}).get("provider"), "tokens": tokens, "cost_aed": doc.cost_aed}
 
 
 @frappe.whitelist()
@@ -117,7 +131,8 @@ def compare_documents(doc_name_a, doc_name_b, aspect=None):
         if d.status != "Ready":
             frappe.throw(f"Document '{d.name}' must be in Ready status.")
     settings = frappe.get_single("Doc Intelligence Settings")
-    result = engine_compare(doc_a.raw_text, doc_a.title, doc_b.raw_text, doc_b.title, aspect, frappe.session.user, settings.max_tokens_per_request or 2000)
+    from doc_intelligence.doc_intelligence.prompts import output_language
+    result = engine_compare(doc_a.raw_text, doc_a.title, doc_b.raw_text, doc_b.title, aspect, frappe.session.user, settings.max_tokens_per_request or 2000, output_language())
     return result
 
 
@@ -129,8 +144,26 @@ def get_document_stats():
     failed = frappe.db.count("AI Document", {"status": "Failed"})
     pending = frappe.db.count("AI Document", {"status": "Pending"})
     tokens = frappe.db.sql("SELECT SUM(token_count) FROM `tabAI Document`")[0][0] or 0
-    by_type = frappe.db.sql("SELECT document_type, COUNT(*) as cnt FROM `tabAI Document` GROUP BY document_type", as_dict=True)
-    return {"total": total, "ready": ready, "processing": processing, "failed": failed, "pending": pending, "total_tokens": tokens, "by_type": by_type}
+    by_type = frappe.db.sql(
+        "SELECT document_type, COUNT(*) as cnt FROM `tabAI Document` GROUP BY document_type",
+        as_dict=True,
+    )
+    recognized_by_type = frappe.db.sql(
+        "SELECT document_type, COUNT(*) as cnt FROM `tabAI Document` "
+        "WHERE status='Ready' GROUP BY document_type",
+        as_dict=True,
+    )
+    return {
+        "total": total,
+        "ready": ready,
+        "processing": processing,
+        "failed": failed,
+        "pending": pending,
+        "total_tokens": tokens,
+        "by_type": by_type,
+        "recognized": ready,
+        "recognized_by_type": recognized_by_type,
+    }
 
 
 @frappe.whitelist()
@@ -144,6 +177,8 @@ def get_provider_settings():
     if "System Manager" not in frappe.get_roles():
         frappe.throw("Only System Manager can view provider settings.", frappe.PermissionError)
     settings = frappe.get_single("Doc Intelligence Settings")
+    from doc_intelligence.doc_intelligence.prompts import DEFAULT_ANALYSIS_PROMPT
+    default_prompt = DEFAULT_ANALYSIS_PROMPT.strip()
     def mask(val): return "xxxxxx" if val else ""
     return {
         "enabled_providers": settings.enabled_providers or "groq,gemini,cerebras,openrouter,mistral,claude",
@@ -155,8 +190,11 @@ def get_provider_settings():
         "claude_api_key": mask(settings.claude_api_key), "claude_model": settings.claude_model,
         "openai_api_key": mask(settings.openai_api_key), "openai_model": settings.openai_model,
         "deepseek_api_key": mask(settings.deepseek_api_key), "deepseek_model": settings.deepseek_model,
-        "max_tokens_per_request": settings.max_tokens_per_request or 2000,
+        "max_tokens_per_request": settings.max_tokens_per_request or 4000,
         "platform_name": settings.platform_name, "support_email": settings.support_email,
+        "analysis_prompt": (settings.get("analysis_prompt") or "").strip() or default_prompt,
+        "default_analysis_prompt": default_prompt,
+        "aed_per_usd": settings.get("aed_per_usd") or 3.6725,
     }
 
 
@@ -220,16 +258,21 @@ def create_purchase_invoice(doc_name):
     # Get default company info for context
     default_company = frappe.defaults.get_global_default("company") or ""
     
+    from doc_intelligence.doc_intelligence.prompts import get_analysis_prompt
+    rules = get_analysis_prompt()
     prompt = f"""You are an ERPNext expert. Extract Purchase Invoice fields from this invoice document text.
+
+Follow these accounting rules. Do not invent a value that is not printed:
+{rules}
 
 Return ONLY a valid JSON object with these exact keys (use null for fields not found):
 {{
   "supplier_name": "exact supplier/vendor name as shown",
   "bill_no": "invoice number / bill number",
   "bill_date": "invoice date in YYYY-MM-DD format",
-  "posting_date": "today or invoice date in YYYY-MM-DD format", 
+  "posting_date": "invoice date in YYYY-MM-DD format, null if the date is not printed",
   "due_date": "due date or payment due date in YYYY-MM-DD format, null if not found",
-  "currency": "currency code like INR, USD etc, default INR",
+  "currency": "currency code printed on the document, null if it is not printed",
   "items": [
     {{
       "item_name": "description of item/service",
@@ -335,13 +378,19 @@ Return only the JSON, no explanation."""
 
 
 @frappe.whitelist()
-def create_purchase_invoice_doc(supplier, bill_no, bill_date, posting_date, due_date,
-                                 company, currency, items, remarks, naming_series,
-                                 confirm_duplicate=0):
+def create_purchase_invoice_doc(supplier, bill_no=None, bill_date=None, posting_date=None,
+                                 company=None, currency=None, items=None, naming_series=None,
+                                 due_date=None, remarks=None, confirm_duplicate=0):
     import json
 
     if isinstance(items, str):
         items = json.loads(items)
+    items = items or []
+
+    invoice_date = posting_date or bill_date or frappe.utils.nowdate()
+    posting_date = posting_date or invoice_date
+    bill_date = bill_date or invoice_date
+    due_date = due_date or posting_date
 
     # Hard safety net: block an exact-duplicate bill_no+supplier unless the
     # user has explicitly confirmed they want to proceed anyway (the
@@ -357,7 +406,16 @@ def create_purchase_invoice_doc(supplier, bill_no, bill_date, posting_date, due_
                 f"supplier ({existing}). Pass confirm_duplicate=1 to create it anyway."
             )
 
-    expense_account = frappe.db.get_value("Company", company, "default_expense_account") or "Cost of Goods Sold - PSS"
+    if not company:
+        frappe.throw("Select a company before creating the Purchase Invoice.")
+    expense_account = frappe.db.get_value("Company", company, "default_expense_account")
+    if not expense_account:
+        frappe.throw(
+            f"Company {company} has no Default Expense Account. "
+            "Set it on the Company form, then create the invoice again."
+        )
+    if not currency:
+        currency = frappe.db.get_value("Company", company, "default_currency")
 
     pi_items = []
     for item in items:
@@ -370,19 +428,22 @@ def create_purchase_invoice_doc(supplier, bill_no, bill_date, posting_date, due_
             "expense_account": expense_account,
         })
 
-    doc = frappe.get_doc({
+    payload = {
         "doctype": "Purchase Invoice",
-        "naming_series": naming_series or "PINV26/.#####",
         "supplier": supplier,
         "bill_no": bill_no,
         "bill_date": bill_date,
         "posting_date": posting_date,
-        "due_date": due_date or posting_date,
+        "due_date": due_date,
         "company": company,
-        "currency": currency or "INR",
+        "currency": currency,
         "items": pi_items,
-        "custom_pending_remarks": remarks or "Created via Doc Intelligence",
-    })
+    }
+    if naming_series:
+        payload["naming_series"] = naming_series
+    if remarks:
+        payload["remarks"] = remarks
+    doc = frappe.get_doc(payload)
     doc.insert(ignore_mandatory=True)
     # Commits immediately after insert() so the newly-created draft record is
     # durably saved before the API response returns and the frontend navigates
@@ -770,7 +831,7 @@ Return ONLY a valid JSON object with these exact keys (use null when a value is 
   {party_line}
   "transaction_date": "document date in YYYY-MM-DD, else null",
   "valid_till": "validity / delivery / required-by date in YYYY-MM-DD, else null",
-  "currency": "currency code like INR/USD, default INR",
+  "currency": "currency code printed on the document, null if it is not printed",
   "items": [
     {{
       "item_name": "name/description of the item or service",
@@ -935,7 +996,7 @@ def create_transaction_doc(txn_type, header, items, confirm_duplicate=0):
     base = {
         "doctype": txn_type,
         "company": company,
-        "currency": header.get("currency") or "INR",
+        "currency": header.get("currency") or frappe.db.get_value("Company", company, "default_currency"),
         "items": resolved,
     }
 
@@ -1011,6 +1072,132 @@ def _create_item(name, uom="Nos", rate=0):
     })
     doc.insert(ignore_mandatory=True, ignore_permissions=True)
     return doc.name
+
+
+# =====================================================================
+# BANK STATEMENT CSV EXPORT
+# =====================================================================
+
+def _statement_prompt(raw_text):
+    return f"""Extract every bank transaction from this bank statement.
+
+Return ONLY one valid JSON object with this shape:
+{{
+  "account_name": "account holder or null",
+  "account_number": "masked account number or null",
+  "currency": "three-letter currency code or null",
+  "period_start": "YYYY-MM-DD or null",
+  "period_end": "YYYY-MM-DD or null",
+  "opening_balance": number_or_null,
+  "closing_balance": number_or_null,
+  "transactions": [
+    {{
+      "date": "YYYY-MM-DD",
+      "description": "complete bank narrative",
+      "reference": "bank reference or empty string",
+      "debit": positive_number_or_0,
+      "credit": positive_number_or_0,
+      "balance": number_or_null
+    }}
+  ]
+}}
+
+Rules:
+- Extract only rows visibly present in the statement; never invent or combine rows.
+- Debit means money out / withdrawal. Credit means money in / deposit.
+- Exactly one of debit or credit must be positive for each transaction.
+- Keep transaction order exactly as printed.
+- Numbers must not contain currency symbols or thousands separators.
+
+Statement text:
+---
+{raw_text[:20000]}
+---
+
+Return only JSON, with no markdown or explanation."""
+
+
+@frappe.whitelist()
+def extract_bank_statement(doc_name):
+    """Extract normalized, reviewable transactions from a ready document."""
+    from doc_intelligence.doc_intelligence.llm_engine import llm_call
+    from doc_intelligence.doc_intelligence.statement_export import validate_statement
+
+    doc = frappe.get_doc("AI Document", doc_name)
+    if doc.status != "Ready":
+        frappe.throw("Document must be in Ready status before exporting a statement.")
+    if doc.document_type not in ("Transactions", "Statements"):
+        frappe.throw("Only Statement or Transaction documents can be exported.")
+    if not doc.raw_text:
+        frappe.throw("No raw text found. Please re-process the document first.")
+
+    settings = frappe.get_single("Doc Intelligence Settings")
+    result = llm_call(
+        _statement_prompt(doc.raw_text),
+        "You extract bank statements precisely. Return only valid JSON.",
+        settings.max_tokens_per_request or 4000,
+    )
+    text = re.sub(r"```json\s*|\s*```", "", result.get("text", "")).strip()
+    try:
+        extracted = json.loads(text)
+    except (TypeError, json.JSONDecodeError):
+        frappe.throw(f"AI could not parse the bank statement. Raw response: {text[:500]}")
+    if not isinstance(extracted, dict):
+        frappe.throw("AI returned an invalid bank statement structure.")
+
+    validation = validate_statement(
+        extracted.get("transactions"),
+        extracted.get("opening_balance"),
+        extracted.get("closing_balance"),
+    )
+    extracted["transactions"] = validation["transactions"]
+    return {
+        "statement": extracted,
+        "validation": validation,
+        "ai_provider": result.get("provider", ""),
+    }
+
+
+@frappe.whitelist()
+def export_statement_csv(doc_name, target, transactions, currency=None):
+    """Create an import-ready CSV from user-reviewed statement rows."""
+    from doc_intelligence.doc_intelligence.statement_export import (
+        SUPPORTED_TARGETS,
+        normalize_transactions,
+        render_statement_csv,
+    )
+
+    if target not in SUPPORTED_TARGETS:
+        frappe.throw(f"Unsupported CSV target: {target}")
+
+    doc = frappe.get_doc("AI Document", doc_name)
+    if doc.status != "Ready" or doc.document_type not in ("Transactions", "Statements"):
+        frappe.throw("A ready Statement or Transaction document is required.")
+    if isinstance(transactions, str):
+        try:
+            transactions = json.loads(transactions)
+        except json.JSONDecodeError:
+            frappe.throw("Transactions contain invalid JSON.")
+
+    rows = normalize_transactions(transactions)
+    if not rows:
+        frappe.throw("No transactions to export.")
+    for row in rows:
+        if not row["date"] or not row["description"]:
+            frappe.throw(
+                f"Row {row['row_number']} needs both a date and description."
+            )
+        if bool(row["debit"]) == bool(row["credit"]):
+            frappe.throw(
+                f"Row {row['row_number']} must contain either a debit or a credit."
+            )
+
+    safe_title = re.sub(r"[^A-Za-z0-9._-]+", "-", doc.title or doc.name).strip("-")
+    return {
+        "filename": f"{safe_title or 'statement'}-{target}.csv",
+        "csv": render_statement_csv(rows, target, currency or ""),
+        "row_count": len(rows),
+    }
 
 
 # =====================================================================
