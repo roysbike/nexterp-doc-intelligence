@@ -1075,6 +1075,132 @@ def _create_item(name, uom="Nos", rate=0):
 
 
 # =====================================================================
+# BANK STATEMENT CSV EXPORT
+# =====================================================================
+
+def _statement_prompt(raw_text):
+    return f"""Extract every bank transaction from this bank statement.
+
+Return ONLY one valid JSON object with this shape:
+{{
+  "account_name": "account holder or null",
+  "account_number": "masked account number or null",
+  "currency": "three-letter currency code or null",
+  "period_start": "YYYY-MM-DD or null",
+  "period_end": "YYYY-MM-DD or null",
+  "opening_balance": number_or_null,
+  "closing_balance": number_or_null,
+  "transactions": [
+    {{
+      "date": "YYYY-MM-DD",
+      "description": "complete bank narrative",
+      "reference": "bank reference or empty string",
+      "debit": positive_number_or_0,
+      "credit": positive_number_or_0,
+      "balance": number_or_null
+    }}
+  ]
+}}
+
+Rules:
+- Extract only rows visibly present in the statement; never invent or combine rows.
+- Debit means money out / withdrawal. Credit means money in / deposit.
+- Exactly one of debit or credit must be positive for each transaction.
+- Keep transaction order exactly as printed.
+- Numbers must not contain currency symbols or thousands separators.
+
+Statement text:
+---
+{raw_text[:20000]}
+---
+
+Return only JSON, with no markdown or explanation."""
+
+
+@frappe.whitelist()
+def extract_bank_statement(doc_name):
+    """Extract normalized, reviewable transactions from a ready document."""
+    from doc_intelligence.doc_intelligence.llm_engine import llm_call
+    from doc_intelligence.doc_intelligence.statement_export import validate_statement
+
+    doc = frappe.get_doc("AI Document", doc_name)
+    if doc.status != "Ready":
+        frappe.throw("Document must be in Ready status before exporting a statement.")
+    if doc.document_type not in ("Transactions", "Statements"):
+        frappe.throw("Only Statement or Transaction documents can be exported.")
+    if not doc.raw_text:
+        frappe.throw("No raw text found. Please re-process the document first.")
+
+    settings = frappe.get_single("Doc Intelligence Settings")
+    result = llm_call(
+        _statement_prompt(doc.raw_text),
+        "You extract bank statements precisely. Return only valid JSON.",
+        settings.max_tokens_per_request or 4000,
+    )
+    text = re.sub(r"```json\s*|\s*```", "", result.get("text", "")).strip()
+    try:
+        extracted = json.loads(text)
+    except (TypeError, json.JSONDecodeError):
+        frappe.throw(f"AI could not parse the bank statement. Raw response: {text[:500]}")
+    if not isinstance(extracted, dict):
+        frappe.throw("AI returned an invalid bank statement structure.")
+
+    validation = validate_statement(
+        extracted.get("transactions"),
+        extracted.get("opening_balance"),
+        extracted.get("closing_balance"),
+    )
+    extracted["transactions"] = validation["transactions"]
+    return {
+        "statement": extracted,
+        "validation": validation,
+        "ai_provider": result.get("provider", ""),
+    }
+
+
+@frappe.whitelist()
+def export_statement_csv(doc_name, target, transactions, currency=None):
+    """Create an import-ready CSV from user-reviewed statement rows."""
+    from doc_intelligence.doc_intelligence.statement_export import (
+        SUPPORTED_TARGETS,
+        normalize_transactions,
+        render_statement_csv,
+    )
+
+    if target not in SUPPORTED_TARGETS:
+        frappe.throw(f"Unsupported CSV target: {target}")
+
+    doc = frappe.get_doc("AI Document", doc_name)
+    if doc.status != "Ready" or doc.document_type not in ("Transactions", "Statements"):
+        frappe.throw("A ready Statement or Transaction document is required.")
+    if isinstance(transactions, str):
+        try:
+            transactions = json.loads(transactions)
+        except json.JSONDecodeError:
+            frappe.throw("Transactions contain invalid JSON.")
+
+    rows = normalize_transactions(transactions)
+    if not rows:
+        frappe.throw("No transactions to export.")
+    for row in rows:
+        if not row["date"] or not row["description"]:
+            frappe.throw(
+                f"Row {row['row_number']} needs both a date and description."
+            )
+        if bool(row["debit"]) == bool(row["credit"]):
+            frappe.throw(
+                f"Row {row['row_number']} must contain either a debit or a credit."
+            )
+
+    safe_title = re.sub(r"[^A-Za-z0-9._-]+", "-", doc.title or doc.name).strip("-")
+    return {
+        "filename": f"{safe_title or 'statement'}-{target}.csv",
+        "csv": render_statement_csv(rows, target, currency or ""),
+        "row_count": len(rows),
+    }
+
+
+# =====================================================================
 # SPA SESSION HELPERS
 #   Added for the decoupled Vue 3 frontend (frontend/) served via
 #   www/doc-intelligence.html.

@@ -56,7 +56,10 @@ def validate_financials(items, tax_amount=0, grand_total=0, tolerance_percent=0.
             calculated_subtotal += amount
 
     calculated_tax = _safe_float(tax_amount)
-    calculated_grand_total = calculated_subtotal + calculated_tax
+    # The printed unit price on these invoices already includes VAT, and the
+    # printed total is the sum of quantity × price. Adding tax again makes a
+    # matching invoice look short.
+    calculated_grand_total = calculated_subtotal
     detected_total = _safe_float(grand_total)
 
     mismatch_amount = abs(calculated_grand_total - detected_total)

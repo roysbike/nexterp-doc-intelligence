@@ -200,6 +200,11 @@ export const extractTransaction = (doc_name, txn_type) =>
 export const createTransactionDoc = (txn_type, header, items, confirm_duplicate = 0) =>
   call(`${APP}.create_transaction_doc`, { txn_type, header, items, confirm_duplicate }).then(r => r.message)
 
+export const extractBankStatement = (doc_name) =>
+  call(`${APP}.extract_bank_statement`, { doc_name }).then(r => r.message)
+export const exportStatementCsv = (doc_name, target, transactions, currency) =>
+  call(`${APP}.export_statement_csv`, { doc_name, target, transactions, currency }).then(r => r.message)
+
 // ── Ask ERPNext (copilot.py) ───────────────────────────────────────────────
 export const copilotDemoPrompts  = () => call(`${APP}.copilot_demo_prompts`).then(r => r.message)
 export const copilotAsk          = (question) => call(`${APP}.copilot_ask`, { question }).then(r => r.message)

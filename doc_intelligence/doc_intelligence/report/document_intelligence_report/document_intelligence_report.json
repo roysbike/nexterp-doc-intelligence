@@ -21,7 +21,7 @@
    "fieldname": "document_type",
    "label": "Document Type",
    "fieldtype": "Select",
-   "options": "\\nEntities\\nTransactions"
+   "options": "\\nEntities\\nTransactions\\nStatements"
   },
   {
    "fieldname": "status",

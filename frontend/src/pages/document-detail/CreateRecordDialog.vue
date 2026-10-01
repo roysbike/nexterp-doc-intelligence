@@ -30,16 +30,9 @@
 
         <!-- Purchase Invoice: financial validation + supplier ambiguity + duplicate warnings -->
         <template v-if="mode === 'pi'">
-          <div v-if="piValidation" class="di-risk-banner" :class="piValidation.risk_level === 'HIGH' ? 'risk-high' : 'risk-low'">
-            <strong>{{ piValidation.risk_level === 'HIGH' ? '⚠ Totals don\'t match' : '✓ Totals check out' }}</strong>
-            <div class="di-risk-detail">
-              AI-reported total: {{ header.currency }} {{ piValidation.detected_grand_total }} ·
-              Recalculated from line items: {{ header.currency }} {{ piValidation.calculated_grand_total }}
-              <span v-if="piValidation.risk_level === 'HIGH'"> · Mismatch: {{ header.currency }} {{ piValidation.mismatch_amount }}</span>
-            </div>
-            <div v-if="piValidation.risk_level === 'HIGH'" class="di-risk-detail">
-              Double-check the line items and tax amount below before creating this invoice.
-            </div>
+          <div v-if="printedTotal != null" class="di-risk-banner" :class="sumMismatch ? 'risk-high' : 'risk-low'">
+            <strong>{{ sumMismatch ? t('totals.mismatch') : t('totals.ok') }}</strong>
+            <div class="di-risk-detail">{{ totalsDetail }}</div>
           </div>
 
           <div v-if="supplierMultipleMatches" class="di-risk-banner risk-high">
@@ -68,16 +61,9 @@
 
         <!-- Transaction: financial validation + party ambiguity + duplicate warnings -->
         <template v-if="mode === 'txn'">
-          <div v-if="txnValidation" class="di-risk-banner" :class="txnValidation.risk_level === 'HIGH' ? 'risk-high' : 'risk-low'">
-            <strong>{{ txnValidation.risk_level === 'HIGH' ? '⚠ Totals don\'t match' : '✓ Totals check out' }}</strong>
-            <div class="di-risk-detail">
-              AI-reported total: {{ header.currency }} {{ txnValidation.detected_grand_total }} ·
-              Recalculated from line items: {{ header.currency }} {{ txnValidation.calculated_grand_total }}
-              <span v-if="txnValidation.risk_level === 'HIGH'"> · Mismatch: {{ header.currency }} {{ txnValidation.mismatch_amount }}</span>
-            </div>
-            <div v-if="txnValidation.risk_level === 'HIGH'" class="di-risk-detail">
-              Double-check the line items below before creating this {{ target }}.
-            </div>
+          <div v-if="printedTotal != null" class="di-risk-banner" :class="sumMismatch ? 'risk-high' : 'risk-low'">
+            <strong>{{ sumMismatch ? t('totals.mismatch') : t('totals.ok') }}</strong>
+            <div class="di-risk-detail">{{ totalsDetail }}</div>
           </div>
 
           <div v-if="partyMultipleMatches" class="di-risk-banner risk-high">
@@ -196,6 +182,7 @@
               </tbody>
             </table>
           </div>
+          <div class="di-line-sum">{{ t('totals.lines', { currency: header.currency || '', sum: money(lineSum) }) }}</div>
           <button class="di-btn secondary" style="margin-top:8px" @click="items.push({ item_name:'', qty:1, rate:0, uom:'Nos' })">+ Add line</button>
         </template>
 
@@ -275,6 +262,40 @@ const items = ref([])
 const companies = ref([])
 const currencies = ref([])
 const printedCurrency = ref('')
+
+const lineSum = computed(() => {
+  const total = items.value.reduce((sum, it) => sum + (Number(it.qty) || 0) * (Number(it.rate) || 0), 0)
+  return Math.round(total * 100) / 100
+})
+
+const printedTotal = computed(() => {
+  const source = mode.value === 'pi' ? piValidation.value : txnValidation.value
+  const value = Number(source?.detected_grand_total)
+  return Number.isFinite(value) && value > 0 ? Math.round(value * 100) / 100 : null
+})
+
+const sumGap = computed(() => {
+  if (printedTotal.value == null) return null
+  return Math.round((lineSum.value - printedTotal.value) * 100) / 100
+})
+
+const sumMismatch = computed(() => sumGap.value != null && Math.abs(sumGap.value) > 0.05)
+
+const totalsDetail = computed(() => {
+  const currency = header.value.currency || ''
+  const parts = [t('totals.lines', { currency, sum: money(lineSum.value) })]
+  if (printedTotal.value != null) {
+    parts.push(t('totals.printed', { currency, sum: money(printedTotal.value) }))
+  }
+  if (sumMismatch.value) {
+    parts.push(t('totals.gap', { currency, sum: money(Math.abs(sumGap.value)) }))
+  }
+  return parts.join(' · ')
+})
+
+function money(value) {
+  return Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
 const created = ref(null)
 
 const piValidation = ref(null)
@@ -497,6 +518,12 @@ async function createRecord() {
 .di-item-table th:nth-child(2), .di-item-table td:nth-child(2),
 .di-item-table th:nth-child(3), .di-item-table td:nth-child(3) { width: 14%; }
 .di-item-table th:nth-child(4), .di-item-table td:nth-child(4) { width: 16%; }
+.di-line-sum {
+  margin-top: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--di-navy);
+}
 .di-success { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 24px 0; text-align: center; }
 .di-success-icon {
   width: 40px; height: 40px; border-radius: 50%; background: #dcfce7; color: #166534;

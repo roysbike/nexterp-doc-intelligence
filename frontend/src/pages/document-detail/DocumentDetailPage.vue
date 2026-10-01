@@ -17,6 +17,13 @@
         </div>
       </div>
       <div class="di-detail-actions">
+        <button
+          v-if="doc.status === 'Ready' && ['Transactions', 'Statements'].includes(doc.document_type)"
+          class="di-btn secondary"
+          @click="showStatementExport = true"
+        >
+          {{ t('detail.exportStatement') }}
+        </button>
         <button v-if="doc.status === 'Ready'" class="di-btn primary" @click="showCreate = true">
           {{ t('detail.create') }}
         </button>
@@ -41,14 +48,14 @@
       </div>
     </div>
 
-    <div class="di-card" v-if="doc.extracted_table_parsed && doc.extracted_table_parsed.length">
+    <div class="di-card" v-if="displayTableRows.length">
       <h3>{{ t('detail.table') }}</h3>
       <table class="di-item-table">
         <thead>
           <tr><th v-for="col in tableCols" :key="col">{{ col }}</th></tr>
         </thead>
         <tbody>
-          <tr v-for="(row, i) in doc.extracted_table_parsed" :key="i">
+          <tr v-for="(row, i) in displayTableRows" :key="i">
             <td v-for="col in tableCols" :key="col">{{ row[col] }}</td>
           </tr>
         </tbody>
@@ -110,6 +117,11 @@
     </details>
 
     <CreateRecordDialog v-if="showCreate" :doc-name="doc.name" @close="showCreate = false" @created="onCreated" />
+    <ExportStatementDialog
+      v-if="showStatementExport"
+      :doc-name="doc.name"
+      @close="showStatementExport = false"
+    />
   </div>
 
   <div v-else class="di-empty">{{ t('detail.missing') }}</div>
@@ -120,6 +132,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import * as api from '@/api/frappe'
 import CreateRecordDialog from './CreateRecordDialog.vue'
+import ExportStatementDialog from './ExportStatementDialog.vue'
 import { t } from '@/i18n'
 
 const props = defineProps({ name: { type: String, required: true } })
@@ -139,6 +152,7 @@ const compareResult = ref(null)
 const otherReadyDocs = ref([])
 
 const showCreate = ref(false)
+const showStatementExport = ref(false)
 
 const deleting = ref(false)
 const confirmingDelete = ref(false)
@@ -165,9 +179,20 @@ const compareTargetTitle = computed(() =>
   otherReadyDocs.value.find(d => d.name === compareTarget.value)?.title || 'Other document'
 )
 
+const displayTableRows = computed(() => {
+  const tables = doc.value?.extracted_table_parsed
+  if (!Array.isArray(tables) || !tables.length) return []
+  if (!tables[0]?.headers || !Array.isArray(tables[0]?.rows)) return tables
+  return tables.flatMap(table =>
+    (table.rows || []).map(row =>
+      Object.fromEntries((table.headers || []).map((header, index) => [header, row[index] ?? '']))
+    )
+  )
+})
+
 const tableCols = computed(() => {
-  const rows = doc.value?.extracted_table_parsed
-  return rows && rows.length ? Object.keys(rows[0]) : []
+  const rows = displayTableRows.value
+  return rows.length ? Object.keys(rows[0]) : []
 })
 
 function hasCost(row) {

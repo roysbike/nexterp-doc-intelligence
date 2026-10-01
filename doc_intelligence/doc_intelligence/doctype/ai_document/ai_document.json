@@ -23,7 +23,7 @@
    "fieldname": "document_type",
    "label": "Document Type",
    "fieldtype": "Select",
-   "options": "\nEntities\nTransactions",
+   "options": "\nEntities\nTransactions\nStatements",
    "in_list_view": 1
   },
   {

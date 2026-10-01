@@ -109,7 +109,7 @@ import { t } from '@/i18n'
 const emit = defineEmits(['close', 'uploaded'])
 const store = useDocumentsStore()
 
-const types = ['Entities', 'Transactions']
+const types = ['Entities', 'Transactions', 'Statements']
 
 function typeOption(kind) {
   return `${t('type.' + kind)} (${t('upload.note.' + kind)})`

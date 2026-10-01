@@ -89,7 +89,7 @@ const searchQuery = ref('')
 const showUpload = ref(false)
 
 const statuses = ['Pending', 'Processing', 'Ready', 'Failed']
-const types = ['Entities', 'Transactions']
+const types = ['Entities', 'Transactions', 'Statements']
 
 let searchDebounceTimer = null
 function onSearchInput() {
